@@ -1,11 +1,11 @@
-/* 公司點餐頁（第 2 步）
+/* 公司點餐頁（第 2 步；第 4 步加上 ?view=history 直接開「我的訂單」）
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
   'use strict';
-
+ 
   var CFG = window.APP_CONFIG || {};
-
+ 
   var $view = document.getElementById('view');
   var $bottom = document.getElementById('bottom');
   var $title = document.getElementById('title');
@@ -14,7 +14,7 @@
   var $sheet = document.getElementById('sheet');
   var $sheetBody = document.getElementById('sheetBody');
   var $toast = document.getElementById('toast');
-
+ 
   // 全部狀態放這裡
   var S = {
     home: null,      // init 回傳：user、today、sessions
@@ -23,9 +23,9 @@
     view: 'home',
     busy: false
   };
-
+ 
   /* ---------- 呼叫後端 ---------- */
-
+ 
   function api(action, data) {
     var idToken = window.liff ? liff.getIDToken() : '';
     return fetch(CFG.API_URL, {
@@ -48,9 +48,17 @@
       throw e;
     });
   }
-
+ 
   /* ---------- 啟動 ---------- */
-
+ 
+  // 網址帶 ?view=history 就直接開「我的訂單」。LIFF 第一次開啟時參數可能還包在 liff.state 裡，兩種都看。
+  var wantHistory = (function () {
+    var q = location.search;
+    var m = q.match(/[?&]liff\.state=([^&]*)/);
+    if (m) { try { q += '&' + decodeURIComponent(m[1]).replace(/^[^?]*\?/, ''); } catch (x) {} }
+    return /(^|[?&])view=history(&|$)/.test(q);
+  })();
+ 
   function start() {
     if (!CFG.LIFF_ID || !CFG.API_URL) return showFatal('點餐頁還沒設定完成（config.js 的 LIFF_ID 或 API_URL 是空的），請通知行政。');
     if (!window.liff) return showFatal('LINE 登入元件載入失敗，請關閉後重新開啟。');
@@ -62,24 +70,26 @@
       return loadHome();
     }).catch(function (e) { showFatal(e.message); });
   }
-
+ 
   function loadHome() {
     setLoading('載入中…');
     return api('init').then(function (d) {
       S.home = d; S.menu = null; S.cart = [];
       go('home');
+      // 第 4 步：圖文選單「我的訂單」用 ?view=history 開啟時，直接進我的訂單（只在第一次載入時）
+      if (wantHistory && d.user.status === '核准') { wantHistory = false; openHistory(); }
     }).catch(showError);
   }
-
+ 
   /* ---------- 畫面切換 ---------- */
-
+ 
   function go(view) {
     S.view = view;
     closeSheet();
     window.scrollTo(0, 0);
     render();
   }
-
+ 
   function render() {
     var approved = S.home && S.home.user.status === '核准';
     $historyBtn.hidden = !(approved && S.view === 'home');
@@ -87,7 +97,7 @@
     $bottom.hidden = true;
     ({ home: renderHome, menu: renderMenu, cart: renderCart, confirm: renderConfirm, history: renderHistory })[S.view]();
   }
-
+ 
   $back.addEventListener('click', function () {
     if (S.view === 'confirm') return go('cart');
     if (S.view === 'cart') return go('menu');
@@ -95,14 +105,14 @@
     go('home');
   });
   $historyBtn.addEventListener('click', openHistory);
-
+ 
   /* ---------- 首頁 ---------- */
-
+ 
   function renderHome() {
     $title.textContent = '公司點餐';
     var u = S.home.user;
     var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') + '</p>';
-
+ 
     if (u.status === '未申請' || u.status === '待審核') {
       var pending = u.status === '待審核';
       $view.innerHTML = hello +
@@ -121,7 +131,7 @@
       $view.innerHTML = hello + '<div class="card"><h2>帳號已停用</h2><p>如有疑問請聯絡行政。</p></div>';
       return;
     }
-
+ 
     var list = S.home.sessions || [];
     if (!list.length) {
       $view.innerHTML = hello + '<div class="card center"><p>今天還沒有開團。</p><button class="btn" data-act="reload">重新整理</button></div>';
@@ -148,9 +158,9 @@
         '<div class="btn-row">' + btns + '</div></div>';
     }).join('');
   }
-
+ 
   /* ---------- 菜單 ---------- */
-
+ 
   function openMenu(sessionId) {
     setLoading('讀取菜單…');
     api('menu', { sessionId: sessionId }).then(function (d) {
@@ -162,9 +172,9 @@
       go('menu');
     }).catch(showError);
   }
-
+ 
   function cartChanged() { return JSON.stringify(S.cart) !== S.cartStart; }
-
+ 
   function renderMenu() {
     var m = S.menu;
     $title.textContent = m.store.name;
@@ -172,17 +182,17 @@
     m.items.forEach(function (i) { if (cats.indexOf(i.cat) < 0) cats.push(i.cat); });
     var counts = {};
     S.cart.forEach(function (l) { counts[l.itemId] = (counts[l.itemId] || 0) + l.qty; });
-
+ 
     var head = '<div class="store-info"><span class="tag type">' + esc(m.session.type) + '</span> ' +
       (m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
       (m.store.note ? '<p class="small muted">' + esc(m.store.note) + '</p>' : '') + '</div>';
     if (m.myOrder && m.session.open) head += '<div class="notice">你正在修改訂單，送出後會取代原本的訂單（$' + m.myOrder.total + '）。</div>';
     if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
-
+ 
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
       return '<button class="chip' + (i === 0 ? ' on' : '') + '" data-act="cat" data-i="' + i + '">' + esc(c) + '</button>';
     }).join('') + '</nav>' : '';
-
+ 
     var body = cats.map(function (c, ci) {
       return '<h3 class="cat-title" id="cat' + ci + '">' + esc(c) + '</h3>' +
         m.items.filter(function (i) { return i.cat === c; }).map(function (i) {
@@ -192,11 +202,11 @@
             '<span class="price">$' + i.price + '</span></button>';
         }).join('');
     }).join('');
-
+ 
     $view.innerHTML = head + chips + body;
     if (m.session.open) showCartBar('查看購物車', function () { go('cart'); }, !S.cart.length);
   }
-
+ 
   function showCartBar(label, onClick, disabled) {
     var n = S.cart.reduce(function (s, l) { return s + l.qty; }, 0);
     $bottom.innerHTML = '<div class="inner"><div class="sum"><span class="small muted">共 ' + n + ' 份</span><br><b>$' + cartTotal() + '</b></div>' +
@@ -204,12 +214,12 @@
     $bottom.hidden = false;
     document.getElementById('bottomBtn').onclick = onClick;
   }
-
+ 
   /* ---------- 計價（和 Api.gs 的規則相同，只做顯示；實際金額以後端計算為準） ---------- */
-
+ 
   function itemOf(id) { return S.menu.items.filter(function (i) { return i.id === id; })[0]; }
   function groupsOf(item) { return item.groupIds.map(function (g) { return S.menu.groups[g]; }); }
-
+ 
   function linePrice(l) {
     var item = itemOf(l.itemId);
     if (!item) return 0;
@@ -220,7 +230,7 @@
     return (item.price + add) * l.qty;
   }
   function cartTotal() { return S.cart.reduce(function (s, l) { return s + (l.stale ? 0 : linePrice(l)); }, 0); }
-
+ 
   function optText(l) {
     var item = itemOf(l.itemId);
     if (!item) return '';
@@ -229,22 +239,22 @@
       return picked.length ? g.name + '：' + picked.map(function (o) { return o.name + (o.price ? '(+' + o.price + ')' : ''); }).join('、') : '';
     }).filter(Boolean).join('；');
   }
-
+ 
   function ruleText(g) {
     if (g.single) return g.required ? '必選・選 1' : '可不選・最多 1';
     if (g.min === g.max) return '必選・選 ' + g.min;
     return g.min ? '選 ' + g.min + '～' + g.max : '可不選・最多 ' + g.max;
   }
-
+ 
   function groupOk(g, ids) {
     var n = g.options.filter(function (o) { return ids.indexOf(o.id) >= 0; }).length;
     return n >= g.min && n <= g.max;
   }
-
+ 
   /* ---------- 選項視窗 ---------- */
-
+ 
   var draft = null; // { itemId, optionIds, qty, note, index }
-
+ 
   function openItem(itemId, index) {
     var item = itemOf(itemId);
     if (!item) return;
@@ -260,7 +270,7 @@
     renderSheet();
     $sheet.hidden = false;
   }
-
+ 
   function renderSheet() {
     var item = itemOf(draft.itemId);
     var groups = groupsOf(item);
@@ -284,7 +294,7 @@
       '<div class="btn-row"><button class="btn" data-sact="close">取消</button>' +
       '<button class="btn primary" data-sact="save">' + (draft.index != null ? '更新' : '加入購物車') + '　$' + linePrice(draft) + '</button></div>';
   }
-
+ 
   $sheetBody.addEventListener('click', function (e) {
     var b = e.target.closest('[data-sact]');
     if (!b) return;
@@ -322,11 +332,11 @@
     renderSheet();
   });
   $sheet.querySelector('[data-close]').addEventListener('click', closeSheet);
-
+ 
   function closeSheet() { $sheet.hidden = true; }
-
+ 
   /* ---------- 購物車 ---------- */
-
+ 
   function lineHtml(l, i, editable) {
     var item = itemOf(l.itemId);
     var name = item ? item.name : (l.oldName || l.itemId);
@@ -341,7 +351,7 @@
         (item ? '<button class="btn" data-act="edit" data-i="' + i + '">修改</button>' : '') + '</div>' : '') +
       '</div>';
   }
-
+ 
   function renderCart() {
     $title.textContent = '購物車';
     if (!S.cart.length) {
@@ -354,9 +364,9 @@
     var stale = S.cart.some(function (l) { return l.stale; });
     showCartBar(stale ? '請先處理標示的品項' : '下一步：確認', function () { go('confirm'); }, !S.cart.length || stale);
   }
-
+ 
   /* ---------- 確認送出 ---------- */
-
+ 
   function renderConfirm() {
     var m = S.menu;
     $title.textContent = '確認訂單';
@@ -367,7 +377,7 @@
       '<div class="total-row"><span>總金額</span><span>$' + cartTotal() + '</span></div></div>';
     showCartBar(m.myOrder ? '確認修改' : '確認送出', submitOrder, S.busy);
   }
-
+ 
   function submitOrder() {
     if (S.busy) return;
     S.busy = true;
@@ -384,7 +394,7 @@
       alertMsg(e.message);
     });
   }
-
+ 
   function cancelOrder(sessionId) {
     if (!window.confirm('確定要取消這一團的訂單嗎？')) return;
     setLoading('取消中…');
@@ -393,15 +403,15 @@
       return loadHome();
     }).catch(showError);
   }
-
+ 
   /* ---------- 我的訂單 ---------- */
-
+ 
   function openHistory() {
     setLoading('讀取訂單…');
     S.view = 'history';
     api('history').then(function (d) { S.history = d; go('history'); }).catch(showError);
   }
-
+ 
   function renderHistory() {
     $title.textContent = '我的訂單';
     var d = S.history;
@@ -421,9 +431,9 @@
     }).join('');
     $view.innerHTML = html;
   }
-
+ 
   /* ---------- 頁面上的按鈕 ---------- */
-
+ 
   $view.addEventListener('click', function (e) {
     var b = e.target.closest('[data-act]');
     if (!b || b.disabled) return;
@@ -450,20 +460,20 @@
       }
     }
   });
-
+ 
   /* ---------- 小工具 ---------- */
-
+ 
   function setLoading(msg) {
     closeSheet();
     $bottom.hidden = true;
     $view.innerHTML = '<div class="center muted">' + esc(msg) + '</div>';
   }
-
+ 
   function showFatal(msg) {
     $bottom.hidden = true;
     $view.innerHTML = '<div class="card center"><p>' + esc(msg) + '</p><button class="btn" onclick="location.reload()">重新載入</button></div>';
   }
-
+ 
   function showError(e) {
     if (e && e.code === 'NOT_APPROVED') return loadHome();
     $bottom.hidden = true;
@@ -471,9 +481,9 @@
     $view.innerHTML = '<div class="card center"><p>' + esc(e && e.message || '發生錯誤') + '</p>' +
       '<button class="btn" data-act="reload">回首頁</button></div>';
   }
-
+ 
   function alertMsg(msg) { window.alert(msg); }
-
+ 
   var toastTimer;
   function toast(msg) {
     $toast.textContent = msg;
@@ -481,12 +491,13 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { $toast.hidden = true; }, 2200);
   }
-
+ 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-
+ 
   start();
 })();
+ 
