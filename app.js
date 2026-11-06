@@ -1,10 +1,12 @@
 /* 公司點餐頁（第 2 步；第 4 步加上 ?view=history 直接開「我的訂單」）
+ * 第 6 步：合計不是整數（例如 $22.5）不能送出；菜單和數量旁顯示「最多 20 份」。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
   'use strict';
  
   var CFG = window.APP_CONFIG || {};
+  var MAX_QTY = 20; // 每行最多幾份（和 Api.gs 的 MAX_QTY 相同）
  
   var $view = document.getElementById('view');
   var $bottom = document.getElementById('bottom');
@@ -198,7 +200,7 @@
         m.items.filter(function (i) { return i.cat === c; }).map(function (i) {
           return '<button class="item" data-act="item" data-id="' + esc(i.id) + '"' + (m.session.open ? '' : ' disabled') + '>' +
             '<span><span class="name">' + esc(i.name) + '</span>' + (counts[i.id] ? '<span class="count">' + counts[i.id] + '</span>' : '') +
-            (i.desc ? '<br><span class="desc">' + esc(i.desc) + '</span>' : '') + '</span>' +
+            '<br><span class="desc">' + (i.desc ? esc(i.desc) + '・' : '') + '最多 ' + MAX_QTY + ' 份</span>' + '</span>' +
             '<span class="price">$' + i.price + '</span></button>';
         }).join('');
     }).join('');
@@ -230,6 +232,9 @@
     return (item.price + add) * l.qty;
   }
   function cartTotal() { return S.cart.reduce(function (s, l) { return s + (l.stale ? 0 : linePrice(l)); }, 0); }
+  // 第 6 步：合計必須是整數才能送出（例如 7.5 元的水餃點單數顆會出現 .5 元）
+  function isWhole(n) { return Math.abs(n - Math.round(n)) < 1e-6; }
+  function wholeMsg() { return '合計 $' + cartTotal() + ' 不是整數，請調整數量'; }
  
   function optText(l) {
     var item = itemOf(l.itemId);
@@ -287,7 +292,7 @@
               esc(o.name) + (o.price ? '<small>+' + o.price + '</small>' : '') + '</button>';
           }).join('') + '</div></div>';
       }).join('') +
-      '<div class="group"><div class="group-head"><b>數量</b></div>' +
+      '<div class="group"><div class="group-head"><b>數量</b><span class="tag">最多 ' + MAX_QTY + ' 份</span></div>' +
       '<div class="qty"><button data-sact="dec" aria-label="減少">−</button><span>' + draft.qty + '</span><button data-sact="inc" aria-label="增加">＋</button></div></div>' +
       '<label class="field" for="lineNote">備註（選填）</label>' +
       '<input id="lineNote" type="text" maxlength="50" value="' + esc(draft.note) + '" placeholder="例如：飯少、不要香菜">' +
@@ -302,7 +307,10 @@
     if (noteEl) draft.note = noteEl.value;
     var act = b.dataset.sact;
     if (act === 'close') return closeSheet();
-    if (act === 'inc') draft.qty = Math.min(20, draft.qty + 1);
+    if (act === 'inc') {
+      if (draft.qty >= MAX_QTY) return toast('同一行最多 ' + MAX_QTY + ' 份');
+      draft.qty += 1;
+    }
     if (act === 'dec') draft.qty = Math.max(1, draft.qty - 1);
     if (act === 'opt') {
       var g = S.menu.groups[b.dataset.g];
@@ -359,10 +367,12 @@
     } else {
       $view.innerHTML = '<div class="card">' + S.cart.map(function (l, i) { return lineHtml(l, i, true); }).join('') +
         '<div class="total-row"><span>合計</span><span>$' + cartTotal() + '</span></div></div>' +
+        (isWhole(cartTotal()) ? '' : '<div class="notice">' + wholeMsg() + '才能送出。</div>') +
         '<button class="btn block" data-act="back">＋ 繼續加點</button>';
     }
     var stale = S.cart.some(function (l) { return l.stale; });
-    showCartBar(stale ? '請先處理標示的品項' : '下一步：確認', function () { go('confirm'); }, !S.cart.length || stale);
+    var odd = !isWhole(cartTotal());
+    showCartBar(stale ? '請先處理標示的品項' : (odd ? '金額需為整數' : '下一步：確認'), function () { go('confirm'); }, !S.cart.length || stale || odd);
   }
  
   /* ---------- 確認送出 ---------- */
@@ -374,12 +384,15 @@
       '<div class="card"><div class="row"><h2>' + esc(m.store.name) + '</h2><span class="tag type">' + esc(m.session.type) + '</span></div>' +
       '<p class="small muted">' + esc(m.session.date) + '・' + esc(m.session.cutoff) + ' 截止・訂購人 ' + esc(m.userName || '') + '</p>' +
       S.cart.map(function (l, i) { return lineHtml(l, i, false); }).join('') +
-      '<div class="total-row"><span>總金額</span><span>$' + cartTotal() + '</span></div></div>';
-    showCartBar(m.myOrder ? '確認修改' : '確認送出', submitOrder, S.busy);
+      '<div class="total-row"><span>總金額</span><span>$' + cartTotal() + '</span></div></div>' +
+      (isWhole(cartTotal()) ? '' : '<div class="notice">' + wholeMsg() + '才能送出。</div>');
+    var odd = !isWhole(cartTotal());
+    showCartBar(odd ? '金額需為整數' : (m.myOrder ? '確認修改' : '確認送出'), submitOrder, S.busy || odd);
   }
  
   function submitOrder() {
     if (S.busy) return;
+    if (!isWhole(cartTotal())) return alertMsg(wholeMsg());
     S.busy = true;
     var btn = document.getElementById('bottomBtn');
     btn.disabled = true; btn.textContent = '送出中…';
