@@ -1,5 +1,6 @@
 /* 公司點餐頁（第 2 步；第 4 步加上 ?view=history 直接開「我的訂單」）
  * 第 6 步：合計不是整數（例如 $22.5）不能送出；菜單和數量旁顯示「最多 20 份」。
+ * 第 7 步：取消的團顯示「已取消」和作廢的訂單；每一團的公告顯示在首頁和菜單上方；「我的訂單」標「開團取消」。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -143,6 +144,17 @@
     $view.innerHTML = hello + list.map(function (s) {
       var o = s.myOrder;
       var btns;
+      var notice = s.notice ? '<div class="notice">公告：' + esc(s.notice) + '</div>' : '';
+      // 第 7 步：取消的團
+      if (s.canceled) {
+        var v = s.voidedOrder;
+        return '<div class="card">' +
+          '<div class="row"><span class="tag type">' + esc(s.type) + '</span><span class="tag warn">已取消</span></div>' +
+          '<h2 style="margin-top:8px;text-decoration:line-through;color:#888">' + esc(s.storeName) + '</h2>' + notice +
+          (v ? '<p class="small">你在這團的訂單（$' + v.total + '）已作廢。</p>'
+             : '<p class="small muted">這一團已取消。</p>') +
+          '</div>';
+      }
       if (s.open) {
         btns = o
           ? '<button class="btn" data-act="cancel" data-id="' + esc(s.id) + '">取消訂單</button>' +
@@ -154,7 +166,7 @@
       return '<div class="card">' +
         '<div class="row"><span class="tag type">' + esc(s.type) + '</span>' +
         (s.open ? '<span class="tag open">開放中・' + esc(s.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') + '</div>' +
-        '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' +
+        '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + notice +
         (o ? '<p class="small">你已點餐：<b>$' + o.total + '</b>　' + (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>') + '</p>'
            : '<p class="small muted">' + (s.open ? '你還沒點餐' : '你這團沒有點餐') + '</p>') +
         '<div class="btn-row">' + btns + '</div></div>';
@@ -189,7 +201,9 @@
       (m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
       (m.store.note ? '<p class="small muted">' + esc(m.store.note) + '</p>' : '') + '</div>';
     if (m.myOrder && m.session.open) head += '<div class="notice">你正在修改訂單，送出後會取代原本的訂單（$' + m.myOrder.total + '）。</div>';
-    if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
+    if (m.session.notice) head += '<div class="notice">公告：' + esc(m.session.notice) + '</div>';
+    if (m.session.canceled) head += '<div class="notice">這一團已經取消，只能看菜單。</div>';
+    else if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
  
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
       return '<button class="chip' + (i === 0 ? ' on' : '') + '" data-act="cat" data-i="' + i + '">' + esc(c) + '</button>';
@@ -433,6 +447,7 @@
     if (!d.orders.length) html += '<p class="center muted">還沒有訂單紀錄。</p>';
     html += d.orders.map(function (o) {
       var st = o.status === '取消' ? '<span class="tag">已取消</span>'
+        : o.status === '團取消' ? '<span class="tag warn">開團取消</span>'
         : (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>');
       return '<div class="card"><div class="row"><span class="small muted">' + esc(o.date) + '・' + esc(o.type) + '</span>' + st + '</div>' +
         '<div class="row"><h3>' + esc(o.storeName) + '</h3><b>$' + o.total + '</b></div>' +
