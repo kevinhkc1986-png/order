@@ -1,6 +1,7 @@
 /* 公司點餐頁（第 2 步；第 4 步加上 ?view=history 直接開「我的訂單」）
  * 第 6 步：合計不是整數（例如 $22.5）不能送出；菜單和數量旁顯示「最多 20 份」。
  * 第 7 步：取消的團顯示「已取消」和作廢的訂單；每一團的公告顯示在首頁和菜單上方；「我的訂單」標「開團取消」。
+ * 第 9 步：菜單列表品項底下的小字不再顯示「最多 20 份」（品項視窗數量旁和按到 20 的提示保留）。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -214,7 +215,7 @@
         m.items.filter(function (i) { return i.cat === c; }).map(function (i) {
           return '<button class="item" data-act="item" data-id="' + esc(i.id) + '"' + (m.session.open ? '' : ' disabled') + '>' +
             '<span><span class="name">' + esc(i.name) + '</span>' + (counts[i.id] ? '<span class="count">' + counts[i.id] + '</span>' : '') +
-            '<br><span class="desc">' + (i.desc ? esc(i.desc) + '・' : '') + '最多 ' + MAX_QTY + ' 份</span>' + '</span>' +
+            (i.desc ? '<br><span class="desc">' + esc(i.desc) + '</span>' : '') + '</span>' +
             '<span class="price">$' + i.price + '</span></button>';
         }).join('');
     }).join('');
