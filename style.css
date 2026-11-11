@@ -12,7 +12,7 @@
   --danger: #c62828;
   --radius: 12px;
 }
-
+ 
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -23,7 +23,7 @@ body {
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 [hidden] { display: none !important; }
-
+ 
 .topbar {
   position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 8px;
@@ -33,12 +33,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .topbar h1 { flex: 1; margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { border: 0; background: none; font-size: 30px; line-height: 1; padding: 0 6px 4px; }
 .link-btn { border: 0; background: none; color: var(--brand); font-weight: 600; padding: 6px; }
-
+ 
 main { max-width: 640px; margin: 0 auto; padding: 16px; }
 .center { text-align: center; padding: 48px 8px; }
 .muted { color: var(--muted); }
 .small { font-size: 14px; }
-
+ 
 .card {
   background: var(--card); border-radius: var(--radius);
   padding: 16px; margin-bottom: 12px;
@@ -54,7 +54,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 .tag.open { background: var(--brand-soft); color: var(--brand); }
 .tag.warn { background: var(--warn-soft); color: var(--warn); }
 .tag.type { background: #eef2ff; color: #3949ab; }
-
+ 
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: 44px; padding: 0 18px; border-radius: 10px;
@@ -66,13 +66,13 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn-row { display: flex; gap: 8px; margin-top: 12px; }
 .btn-row .btn { flex: 1; }
-
+ 
 input[type=text], textarea {
   width: 100%; font: inherit; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 10px; background: #fff;
 }
 label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
-
+ 
 /* 菜單 */
 .store-info { margin-bottom: 8px; }
 .cats {
@@ -100,7 +100,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
   display: inline-block; min-width: 22px; margin-left: 6px; padding: 0 6px;
   border-radius: 999px; background: var(--brand); color: #fff; font-size: 13px; text-align: center;
 }
-
+ 
 /* 底部列 */
 .bottom-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
@@ -110,7 +110,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .bottom-bar .inner { max-width: 640px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
 .bottom-bar .sum { flex: 1; }
 .bottom-bar .sum b { font-size: 20px; }
-
+ 
 /* 選項視窗 */
 .sheet-wrap { position: fixed; inset: 0; z-index: 10; }
 .sheet-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .4); }
@@ -135,7 +135,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .qty { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; }
 .qty button { width: 42px; height: 40px; border: 0; background: none; font-size: 20px; }
 .qty span { min-width: 32px; text-align: center; font-weight: 600; }
-
+ 
 /* 購物車、確認 */
 .line { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .line:last-child { border-bottom: 0; }
@@ -144,9 +144,53 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .line.stale { background: var(--warn-soft); margin: 0 -16px; padding: 12px 16px; }
 .total-row { display: flex; justify-content: space-between; font-size: 18px; font-weight: 700; padding-top: 12px; }
 .notice { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 15px; }
-
+ 
 .toast {
   position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   z-index: 20; max-width: 90vw;
   background: rgba(31, 35, 40, .92); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 15px;
 }
+ 
+/* ---------- 第 18 步 ---------- */
+/* 搜尋框＋分類列一起固定在頂端 */
+.menu-tools {
+  position: sticky; top: 52px; z-index: 4;
+  margin: 0 -16px 8px; padding: 8px 16px 0; background: var(--bg);
+}
+.menu-tools .cats { position: static; margin: 0 -16px; padding: 8px 16px 10px; }
+.search { position: relative; }
+.search input {
+  width: 100%; font: inherit; padding: 9px 40px 9px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  -webkit-appearance: none; appearance: none;
+}
+.search input::-webkit-search-cancel-button { display: none; }
+.search-clear {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border: 0; background: none; font-size: 22px; color: var(--muted);
+}
+ 
+/* 截止倒數 */
+.cd-banner {
+  position: sticky; top: 60px; z-index: 3;
+  background: #fdecea; color: var(--danger); border: 1px solid #f5c2c0;
+  border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 15px; font-weight: 600;
+}
+.cd-bar {
+  max-width: 640px; margin: -10px auto 10px; padding: 6px 12px;
+  background: #fdecea; color: var(--danger); font-size: 14px; font-weight: 600; text-align: center;
+  border-radius: 0 0 10px 10px;
+}
+.cart-pending { color: var(--warn); font-weight: 600; margin: 4px 0 0; }
+ 
+/* 上次在這家點的 */
+.card.reorder { border-color: #c7d2fe; background: #f5f7ff; }
+ 
+/* 送出後的畫面 */
+.done-mark {
+  width: 56px; height: 56px; margin: 4px auto 8px; border-radius: 50%;
+  background: var(--brand); color: #fff; font-size: 32px; line-height: 56px; text-align: center; font-weight: 700;
+}
+.center-text { text-align: center; }
+.card.done h2 { margin-bottom: 2px; }
+ 
