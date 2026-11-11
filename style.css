@@ -194,3 +194,15 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .center-text { text-align: center; }
 .card.done h2 { margin-bottom: 2px; }
  
+/* ===== 第 20 步：行政代點 ===== */
+.proxy-banner { position: sticky; top: 52px; z-index: 5; height: 40px; box-sizing: border-box;
+  background: #fff4cc; color: #7a5200; border-bottom: 1px solid #f2c94c;
+  padding: 0 14px; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 有黃色提示時，下面固定在頂端的東西往下讓 40px */
+body.proxying .cats, body.proxying .menu-tools { top: 92px; }
+body.proxying .cd-banner { top: 100px; }
+.proxy-banner[hidden] { display: none; }
+.proxy-off { border: 1px solid #c99a00; background: #fff; color: #7a5200; border-radius: 14px; padding: 3px 10px; font-size: 13px; }
+.proxy-pick { background: #fffbea; border-color: #f2c94c; }
+.proxy-pick select { width: 100%; padding: 8px; font-size: 15px; border: 1px solid #ccc; border-radius: 8px; background: #fff; }
+ 
