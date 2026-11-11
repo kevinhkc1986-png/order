@@ -14,6 +14,10 @@
  *   - 送出後顯示「已送出」畫面，按「回首頁」才離開。
  *   - 菜單上方加搜尋框；捲動時分類列自動標出目前所在的分類。
  *   - 「上次在這家點的」一鍵加入（記在這支手機，第 18 步上線後的訂單才有）。
+ * 第 20 步（行政代點）：
+ *   - 行政（Users「角色」＝行政）首頁上方多一列「幫誰點」，選了人之後首頁、菜單、購物車、訂單都是那個人的。
+ *   - 幫別人點的時候畫面上方一直有黃色提示；購物車暫存分開存，「上次在這家點的」不顯示也不記。
+ *   - 截止後行政還能補單、改單、取消（只限當天），送出前多確認一次。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -38,8 +42,21 @@
     menu: null,      // menu 回傳
     cart: [],        // [{ itemId, optionIds, qty, note, stale }]
     view: 'home',
-    busy: false
+    busy: false,
+    forId: '',       // 第 20 步：行政正在幫誰點（空白＝自己）
+    forName: ''
   };
+ 
+  // 第 20 步：幫別人點的時候，畫面最上面的黃色提示（index.html 不用改，這裡自己加）
+  var $proxy = document.createElement('div');
+  $proxy.className = 'proxy-banner';
+  $proxy.hidden = true;
+  $view.parentNode.insertBefore($proxy, $view);
+  $proxy.addEventListener('click', function (e) {
+    if (e.target.closest('[data-act="proxyOff"]')) setProxy('', '');
+  });
+ 
+  var PROXY_ACTIONS = { init: true, menu: true, submit: true, cancel: true, history: true };
  
   /* ---------- 呼叫後端 ---------- */
  
@@ -59,13 +76,25 @@
     });
   }
  
+  // 第 20 步：幫別人點的時候，每個請求都帶上對方的 LineID（後端會再確認自己是行政）
+  function withFor(action, data) {
+    data = data || {};
+    if (S.forId && PROXY_ACTIONS[action] && !data.forLineId) {
+      var copy = {};
+      Object.keys(data).forEach(function (k) { copy[k] = data[k]; });
+      copy.forLineId = S.forId;
+      return copy;
+    }
+    return data;
+  }
+ 
   function apiOnce(action, data) {
     var idToken = window.liff ? liff.getIDToken() : '';
     return fetch(CFG.API_URL, {
       method: 'POST',
       // 用 text/plain 送出，瀏覽器不會先發 CORS 預檢（Apps Script 不處理預檢）
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: action, idToken: idToken, data: data || {} }),
+      body: JSON.stringify({ action: action, idToken: idToken, data: withFor(action, data) }),
       redirect: 'follow'
     }).then(function (r) {
       if (!r.ok) throw new Error('連線失敗（' + r.status + '）');
@@ -113,7 +142,8 @@
     S.prefetch = {}; // 首頁重新讀了，背景預載的菜單也要重新載
     return api('init').then(function (d) {
       S.homeStale = false;
-      saveHomeCache(d);
+      if (!S.forId) saveHomeCache(d); // 第 20 步：幫別人點的首頁不存
+      if (S.forId && !d.forUser) { S.forId = ''; S.forName = ''; } // 對方已不在名單
       var keepView = quiet && S.view !== 'home'; // 等待時已經點進菜單了，就不要跳回首頁
       S.home = d;
       if (!keepView) { S.menu = null; S.cart = []; go('home'); }
@@ -176,6 +206,7 @@
     $historyBtn.hidden = !(approved && S.view === 'home');
     $back.hidden = S.view === 'home';
     $bottom.hidden = true;
+    renderProxyBanner(); // 第 20 步
     if (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm') saveCartDraft(); // 第 18 步
     ({ home: renderHome, menu: renderMenu, cart: renderCart, confirm: renderConfirm, history: renderHistory, done: renderDone })[S.view]();
     refreshCountdown();
@@ -196,6 +227,7 @@
     $title.textContent = 'YK中午吃什麼-點餐系統';
     var u = S.home.user;
     var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') +
+      (S.forId ? '　<b>（正在幫 ' + esc(S.forName) + ' 點）</b>' : '') +
       (S.homeStale ? '　<span class="tag">更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時
  
     if (u.status === '未申請' || u.status === '待審核') {
@@ -219,11 +251,12 @@
  
     var list = S.home.sessions || [];
     if (!list.length) {
-      $view.innerHTML = hello + '<div class="card center"><p>今天還沒有開團。</p><button class="btn" data-act="reload">重新整理</button></div>';
+      $view.innerHTML = hello + proxyPicker() + '<div class="card center"><p>今天還沒有開團。</p><button class="btn" data-act="reload">重新整理</button></div>';
       return;
     }
     list = list.slice().sort(function (a, b) { return a.type === b.type ? 0 : (a.type === '餐點' ? -1 : 1); });
-    $view.innerHTML = hello + '<div id="cdHome"></div>' + list.map(function (s) {
+    var who = S.forId ? S.forName : '你'; // 第 20 步
+    $view.innerHTML = hello + proxyPicker() + '<div id="cdHome"></div>' + list.map(function (s) {
       var o = s.myOrder;
       var draftN = s.open ? draftCount(s.id) : 0; // 第 18 步：手機裡還沒送出的購物車
       var btns;
@@ -234,7 +267,7 @@
         return '<div class="card">' +
           '<div class="row"><span class="tag type">' + esc(s.type) + '</span><span class="tag warn">已取消</span></div>' +
           '<h2 style="margin-top:8px;text-decoration:line-through;color:#888">' + esc(s.storeName) + '</h2>' + notice +
-          (v ? '<p class="small">你在這團的訂單（$' + v.total + '）已作廢。</p>'
+          (v ? '<p class="small">' + esc(who) + '在這團的訂單（$' + v.total + '）已作廢。</p>'
              : '<p class="small muted">這一團已取消。</p>') +
           '</div>';
       }
@@ -248,10 +281,11 @@
       }
       return '<div class="card">' +
         '<div class="row"><span class="tag type">' + esc(s.type) + '</span>' +
-        (s.open ? '<span class="tag open">開放中・' + esc(s.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') + '</div>' +
+        (s.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
+          : s.open ? '<span class="tag open">開放中・' + esc(s.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') + '</div>' +
         '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + notice +
-        (o ? '<p class="small">你已點餐：<b>$' + o.total + '</b>　' + (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>') + '</p>'
-           : '<p class="small muted">' + (s.open ? '你還沒點餐' : '你這團沒有點餐') + '</p>') +
+        (o ? '<p class="small">' + esc(who) + '已點餐：<b>$' + o.total + '</b>　' + (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>') + '</p>'
+           : '<p class="small muted">' + esc(who) + (s.open ? '還沒點餐' : '這團沒有點餐') + '</p>') +
         (draftN ? '<p class="small cart-pending">🛒 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '還沒送出</p>' : '') +
         '<div class="btn-row">' + btns + '</div></div>';
     }).join('');
@@ -301,14 +335,16 @@
     S.cart.forEach(function (l) { counts[l.itemId] = (counts[l.itemId] || 0) + l.qty; });
  
     var head = '<div class="store-info"><span class="tag type">' + esc(m.session.type) + '</span> ' +
-      (m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
+      (m.session.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
+        : m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
       (m.store.note ? '<p class="small muted">' + esc(m.store.note) + '</p>' : '') + menuImageLinks(m.store.menuImages) + '</div>';
     if (m.myOrder && m.session.open) head += '<div class="notice">你正在修改訂單，送出後會取代原本的訂單（$' + m.myOrder.total + '）。</div>';
     if (m.session.notice) head += '<div class="notice">公告：' + esc(m.session.notice) + '</div>';
     if (m.session.canceled) head += '<div class="notice">這一團已經取消，只能看菜單。</div>';
     else if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
  
-    if (m.session.open && !S.cart.length) head += lastOrderHtml(); // 第 18 步：上次在這家點的
+    if (m.session.late) head += '<div class="notice">這一團已經截止，你是行政，可以幫忙補單或改單。</div>';
+    if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示）
  
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
       return '<button class="chip' + (i === 0 ? ' on' : '') + '" data-act="cat" data-i="' + i + '">' + esc(c) + '</button>';
@@ -506,7 +542,8 @@
   function renderConfirm() {
     var m = S.menu;
     $title.textContent = '確認訂單';
-    $view.innerHTML = '<div class="notice">請再確認一次品項和金額，送出後截止前仍可修改或取消。</div>' +
+    $view.innerHTML = (S.forId ? '<div class="notice">這張單會記在 <b>' + esc(S.forName) + '</b> 名下，並註明是行政代點。</div>' : '') + // 第 20 步
+      '<div class="notice">請再確認一次品項和金額，送出後截止前仍可修改或取消。</div>' +
       '<div class="card"><div class="row"><h2>' + esc(m.store.name) + '</h2><span class="tag type">' + esc(m.session.type) + '</span></div>' +
       '<p class="small muted">' + esc(m.session.date) + '・' + esc(m.session.cutoff) + ' 截止・訂購人 ' + esc(m.userName || '') + '</p>' +
       S.cart.map(function (l, i) { return lineHtml(l, i, false); }).join('') +
@@ -519,6 +556,7 @@
   function submitOrder() {
     if (S.busy) return;
     if (!isWhole(cartTotal())) return alertMsg(wholeMsg());
+    if (S.menu.session.late && !window.confirm('這一團已經截止，確定要' + (S.forId ? '幫 ' + S.forName + ' ' : '') + '補單嗎？')) return; // 第 20 步
     S.busy = true;
     var btn = document.getElementById('bottomBtn');
     btn.disabled = true; btn.textContent = '送出中…';
@@ -528,7 +566,7 @@
       S.busy = false;
       // 第 18 步：清掉暫存的購物車、記下「上次點的」，顯示已送出畫面
       clearCartDraft(S.menu.session.id);
-      saveLastOrder(S.menu, sent);
+      if (!S.forId) saveLastOrder(S.menu, sent); // 第 20 步：幫別人點的不記成自己的「上次點的」
       S.done = { menu: S.menu, lines: sent, total: r.total, edited: !!S.menu.myOrder };
       go('done');
       return loadHome(true); // 背景更新首頁資料，不換畫面
@@ -540,7 +578,7 @@
   }
  
   function cancelOrder(sessionId) {
-    if (!window.confirm('確定要取消這一團的訂單嗎？')) return;
+    if (!window.confirm(S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？')) return;
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }).then(function () {
       clearCartDraft(sessionId); // 第 18 步
@@ -558,8 +596,8 @@
   }
  
   function renderHistory() {
-    $title.textContent = '我的訂單';
     var d = S.history;
+    $title.textContent = d.forName ? d.forName + ' 的訂單' : '我的訂單'; // 第 20 步
     var html = '<div class="card"><div class="row"><span>尚未付款</span><b style="font-size:22px">$' + d.unpaid + '</b></div>' +
       '<p class="small muted" style="margin:4px 0 0">只計算有效且尚未付款的訂單，現金請交給行政。</p></div>';
     if (!d.orders.length) html += '<p class="center muted">還沒有訂單紀錄。</p>';
@@ -567,7 +605,8 @@
       var st = o.status === '取消' ? '<span class="tag">已取消</span>'
         : o.status === '團取消' ? '<span class="tag warn">開團取消</span>'
         : (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>');
-      return '<div class="card"><div class="row"><span class="small muted">' + esc(o.date) + '・' + esc(o.type) + '</span>' + st + '</div>' +
+      if (o.proxyBy) st = '<span class="tag">行政代點</span> ' + st; // 第 20 步
+      return '<div class="card"><div class="row"><span class="small muted">' + esc(o.date) + '・' + esc(o.type) + '</span><span>' + st + '</span></div>' +
         '<div class="row"><h3>' + esc(o.storeName) + '</h3><b>$' + o.total + '</b></div>' +
         o.lines.map(function (l) {
           return '<div class="line"><div class="row"><span>' + esc(l.name) + ' × ' + l.qty + '</span><span>$' + l.sub + '</span></div>' +
@@ -593,7 +632,8 @@
       '<p class="center-text small muted">' + esc(m.session.type) + '・' + esc(m.store.name) + '・訂購人 ' + esc(m.userName || '') + '</p>' +
       d.lines.map(function (l, i) { return lineHtml(l, i, false); }).join('') +
       '<div class="total-row"><span>總金額</span><span>$' + d.total + '</span></div></div>' +
-      '<div class="notice">' + esc(m.session.cutoff) + ' 截止前都可以回首頁修改或取消。餐點送到後再付錢給行政。</div>' +
+      (S.forId ? '<div class="notice">已記在 ' + esc(S.forName) + ' 名下（行政代點）。</div>'
+        : '<div class="notice">' + esc(m.session.cutoff) + ' 截止前都可以回首頁修改或取消。餐點送到後再付錢給行政。</div>') +
       (next ? '<button class="btn primary block" data-act="menu" data-id="' + esc(next.id) + '">接著點' + esc(next.type) + '：' + esc(next.storeName) + '</button><div style="height:8px"></div>' : '') +
       '<button class="btn block" data-act="home">回首頁</button>';
   }
@@ -608,6 +648,9 @@
   function writeStore(key, obj) {
     try { localStorage.setItem(key, JSON.stringify(obj)); } catch (x) {}
   }
+ 
+  // 第 20 步：幫別人點的購物車分開存（key 前面加對方的 LineID）
+  function draftKey(sessionId) { return S.forId ? S.forId + '|' + sessionId : sessionId; }
  
   function readDrafts() {
     var all = readStore(DRAFT_KEY);
@@ -626,7 +669,7 @@
   function saveCartDraft() {
     if (!S.menu || !S.menu.session.open) return;
     var all = readDrafts();
-    var id = S.menu.session.id;
+    var id = draftKey(S.menu.session.id);
     if (S.cart.length && cartChanged()) all[id] = { date: localToday(), cart: plainLines(S.cart) };
     else delete all[id];
     writeStore(DRAFT_KEY, all);
@@ -634,12 +677,12 @@
  
   function clearCartDraft(sessionId) {
     var all = readDrafts();
-    delete all[sessionId];
+    delete all[draftKey(sessionId)];
     writeStore(DRAFT_KEY, all);
   }
  
   function draftCount(sessionId) {
-    var d = readDrafts()[sessionId];
+    var d = readDrafts()[draftKey(sessionId)];
     return d ? d.cart.reduce(function (s, l) { return s + (Number(l.qty) || 0); }, 0) : 0;
   }
  
@@ -654,7 +697,7 @@
   }
  
   function restoreCartDraft() {
-    var d = readDrafts()[S.menu.session.id];
+    var d = readDrafts()[draftKey(S.menu.session.id)];
     if (!d || !S.menu.session.open) return;
     S.cart = d.cart.map(function (l) {
       return { itemId: l.itemId, optionIds: (l.optionIds || []).slice(), qty: Math.min(MAX_QTY, Math.max(1, Number(l.qty) || 1)),
@@ -728,7 +771,7 @@
  
   function stickyBottom() {
     var el = document.getElementById('menuTools');
-    return 52 + (el ? el.offsetHeight : 0);
+    return 52 + (S.forId ? 40 : 0) + (el ? el.offsetHeight : 0); // 第 20 步：黃色提示 40px
   }
  
   function spyCategory() {
@@ -770,7 +813,7 @@
     if (homeEl && S.view === 'home' && S.home) {
       var rows = [];
       (S.home.sessions || []).forEach(function (s) {
-        if (!s.open || s.canceled) return;
+        if (!s.open || s.canceled || s.late) return; // 第 20 步：行政補單中不倒數
         var left = minutesLeft(S.home.today, s.cutoff);
         if (left == null) return;
         if (left <= 0) {
@@ -788,7 +831,7 @@
     if (barEl) {
       var msg = '';
       var ss = S.menu && S.menu.session;
-      if (ss && ss.open && (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm')) {
+      if (ss && ss.open && !ss.late && (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm')) {
         var l2 = minutesLeft(ss.date, ss.cutoff);
         if (l2 != null && l2 <= 0) msg = '⏰ 已到截止時間，可能無法送出';
         else if (l2 != null && l2 <= WARN_MIN) {
@@ -842,6 +885,40 @@
     }
   });
  
+  /* ---------- 第 20 步：行政代點 ---------- */
+ 
+  function proxyPicker() {
+    var adm = S.home && S.home.admin;
+    if (!adm) return '';
+    var opts = '<option value="">自己</option>' + adm.people.map(function (p) {
+      return '<option value="' + esc(p.lineId) + '"' + (p.lineId === S.forId ? ' selected' : '') + '>' +
+        esc(p.name) + (p.temp ? '（臨時）' : '') + '</option>';
+    }).join('');
+    return '<div class="card proxy-pick"><label class="field" for="forWho">幫誰點（行政）</label>' +
+      '<select id="forWho">' + opts + '</select></div>';
+  }
+ 
+  $view.addEventListener('change', function (e) {
+    if (e.target.id !== 'forWho') return;
+    var sel = e.target;
+    setProxy(sel.value, sel.value ? sel.options[sel.selectedIndex].text.replace(/（臨時）$/, '') : '');
+  });
+ 
+  function setProxy(id, name) {
+    S.forId = id;
+    S.forName = name;
+    S.menu = null; S.cart = [];
+    S.view = 'home';
+    renderProxyBanner();
+    loadHome(); // 重新讀這個人的首頁；背景預載的菜單也會換成這個人的
+  }
+ 
+  function renderProxyBanner() {
+    $proxy.hidden = !S.forId;
+    document.body.classList.toggle('proxying', !!S.forId);
+    $proxy.innerHTML = S.forId ? '<span>正在幫 <b>' + esc(S.forName) + '</b> 點餐</span><button class="proxy-off" data-act="proxyOff">改回自己</button>' : '';
+  }
+ 
   /* ---------- 小工具 ---------- */
  
   function setLoading(msg) {
@@ -857,6 +934,10 @@
  
   function showError(e) {
     if (e && e.code === 'NOT_APPROVED') return loadHome();
+    if (e && (e.code === 'FOR_USER' || e.code === 'FORBIDDEN') && S.forId) { // 第 20 步
+      alertMsg(e.message);
+      return setProxy('', '');
+    }
     $bottom.hidden = true;
     $back.hidden = true;
     $view.innerHTML = '<div class="card center"><p>' + esc(e && e.message || '發生錯誤') + '</p>' +
