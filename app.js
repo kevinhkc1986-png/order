@@ -3,6 +3,11 @@
  * 第 7 步：取消的團顯示「已取消」和作廢的訂單；每一團的公告顯示在首頁和菜單上方；「我的訂單」標「開團取消」。
  * 第 12 步：頁首名稱改為「YK中午吃什麼-點餐系統」。
  * 第 9 步：菜單列表品項底下的小字不再顯示「最多 20 份」（品項視窗數量旁和按到 20 的提示保留）。
+ * 第 15 步：菜單頁店名下方加「看菜單圖」連結。
+ * 第 16 步（加速）：
+ *   - 打開時先顯示上一次的首頁（存在這支手機裡，只限今天），最新資料回來再換掉。
+ *   - 首頁出現後，在背景一家一家先把今天的菜單載好，點進去就不用再等。
+ *   - 送單、取消、申請遇到「系統忙碌」會自動等 1.5 秒再送一次。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -31,7 +36,23 @@
  
   /* ---------- 呼叫後端 ---------- */
  
+  // 第 16 步：LINE 登入完成前先不送出請求（先顯示上次的首頁時，按鈕可能比登入還早被按）
+  var liffReadyResolve;
+  var liffReady = new Promise(function (r) { liffReadyResolve = r; });
+ 
+  // 第 16 步：送單這類要排隊的操作，遇到 BUSY（系統忙碌）自動再送一次
+  var RETRY_ON_BUSY = { submit: true, cancel: true, apply: true };
+ 
   function api(action, data) {
+    return liffReady.then(function () { return apiOnce(action, data); }).catch(function (e) {
+      if (e && e.code === 'BUSY' && RETRY_ON_BUSY[action]) {
+        return new Promise(function (r) { setTimeout(r, 1500); }).then(function () { return apiOnce(action, data); });
+      }
+      throw e;
+    });
+  }
+ 
+  function apiOnce(action, data) {
     var idToken = window.liff ? liff.getIDToken() : '';
     return fetch(CFG.API_URL, {
       method: 'POST',
@@ -67,23 +88,71 @@
   function start() {
     if (!CFG.LIFF_ID || !CFG.API_URL) return showFatal('點餐頁還沒設定完成（config.js 的 LIFF_ID 或 API_URL 是空的），請通知行政。');
     if (!window.liff) return showFatal('LINE 登入元件載入失敗，請關閉後重新開啟。');
+    var cached = !wantHistory && readHomeCache();
+    if (cached) { S.home = cached; S.homeStale = true; go('home'); }
     liff.init({ liffId: CFG.LIFF_ID }).then(function () {
       if (!liff.isLoggedIn()) {
         liff.login({ redirectUri: location.href });
         return new Promise(function () {}); // 等待跳轉
       }
-      return loadHome();
+      liffReadyResolve();
+      return loadHome(!!cached);
     }).catch(function (e) { showFatal(e.message); });
   }
  
-  function loadHome() {
-    setLoading('載入中…');
+  // quiet = true：畫面上已經有上次的首頁，不要換成「載入中…」
+  function loadHome(quiet) {
+    if (!quiet) setLoading('載入中…');
+    S.prefetch = {}; // 首頁重新讀了，背景預載的菜單也要重新載
     return api('init').then(function (d) {
-      S.home = d; S.menu = null; S.cart = [];
-      go('home');
+      S.homeStale = false;
+      saveHomeCache(d);
+      var keepView = quiet && S.view !== 'home'; // 等待時已經點進菜單了，就不要跳回首頁
+      S.home = d;
+      if (!keepView) { S.menu = null; S.cart = []; go('home'); }
       // 第 4 步：圖文選單「我的訂單」用 ?view=history 開啟時，直接進我的訂單（只在第一次載入時）
-      if (wantHistory && d.user.status === '核准') { wantHistory = false; openHistory(); }
-    }).catch(showError);
+      if (wantHistory && d.user.status === '核准') { wantHistory = false; openHistory(); return; }
+      prefetchMenus();
+    }).catch(function (e) { S.homeStale = false; showError(e); });
+  }
+ 
+  /* ---------- 第 16 步：上次的首頁、背景預載菜單 ---------- */
+ 
+  var HOME_KEY = 'yk_home_v1';
+ 
+  function localToday() {
+    var d = new Date();
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+  }
+ 
+  function readHomeCache() {
+    try {
+      var d = JSON.parse(localStorage.getItem(HOME_KEY) || 'null');
+      if (d && d.today === localToday() && d.user && d.user.status === '核准') return d;
+    } catch (x) {}
+    return null;
+  }
+ 
+  function saveHomeCache(d) {
+    try {
+      if (d && d.user && d.user.status === '核准') localStorage.setItem(HOME_KEY, JSON.stringify(d));
+      else localStorage.removeItem(HOME_KEY);
+    } catch (x) {}
+  }
+ 
+  // 一家一家載（不同時送出），避免大家同時打開時一次佔用太多 Apps Script 執行數
+  function prefetchMenus() {
+    var list = ((S.home && S.home.sessions) || []).filter(function (s) { return !s.canceled; });
+    var token = S.prefetch;
+    list.reduce(function (chain, s) {
+      return chain.then(function () {
+        if (S.prefetch !== token || token[s.id]) return;
+        var p = api('menu', { sessionId: s.id });
+        token[s.id] = p;
+        return p.catch(function () { if (S.prefetch === token) delete token[s.id]; });
+      });
+    }, Promise.resolve());
   }
  
   /* ---------- 畫面切換 ---------- */
@@ -116,7 +185,8 @@
   function renderHome() {
     $title.textContent = 'YK中午吃什麼-點餐系統';
     var u = S.home.user;
-    var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') + '</p>';
+    var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') +
+      (S.homeStale ? '　<span class="tag">更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時
  
     if (u.status === '未申請' || u.status === '待審核') {
       var pending = u.status === '待審核';
@@ -179,7 +249,14 @@
  
   function openMenu(sessionId) {
     setLoading('讀取菜單…');
-    api('menu', { sessionId: sessionId }).then(function (d) {
+    S.view = 'loading';
+    // 第 16 步：背景已經預載（或正在載）就直接用；只用一次，之後回首頁會重新載
+    var pre = S.prefetch && S.prefetch[sessionId];
+    if (pre) delete S.prefetch[sessionId];
+    (pre || api('menu', { sessionId: sessionId })).catch(function (e) {
+      if (pre) return api('menu', { sessionId: sessionId }); // 預載失敗就重新讀一次
+      throw e;
+    }).then(function (d) {
       S.menu = d;
       S.cart = d.myOrder ? d.myOrder.lines.map(function (l) {
         return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note, stale: !!l.stale, oldName: l.name };
