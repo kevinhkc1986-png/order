@@ -8,6 +8,12 @@
  *   - 打開時先顯示上一次的首頁（存在這支手機裡，只限今天），最新資料回來再換掉。
  *   - 首頁出現後，在背景一家一家先把今天的菜單載好，點進去就不用再等。
  *   - 送單、取消、申請遇到「系統忙碌」會自動等 1.5 秒再送一次。
+ * 第 18 步（使用體驗）：
+ *   - 購物車暫存在這支手機（只限今天、同一團），關掉再開會自動帶回；送出或取消後清掉。
+ *   - 截止前 15 分鐘出現紅色倒數；購物車還沒送出或還沒點餐也會提醒。
+ *   - 送出後顯示「已送出」畫面，按「回首頁」才離開。
+ *   - 菜單上方加搜尋框；捲動時分類列自動標出目前所在的分類。
+ *   - 「上次在這家點的」一鍵加入（記在這支手機，第 18 步上線後的訂單才有）。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -15,6 +21,7 @@
  
   var CFG = window.APP_CONFIG || {};
   var MAX_QTY = 20; // 每行最多幾份（和 Api.gs 的 MAX_QTY 相同）
+  var WARN_MIN = 15; // 第 18 步：截止前幾分鐘開始顯示紅色倒數
  
   var $view = document.getElementById('view');
   var $bottom = document.getElementById('bottom');
@@ -169,13 +176,16 @@
     $historyBtn.hidden = !(approved && S.view === 'home');
     $back.hidden = S.view === 'home';
     $bottom.hidden = true;
-    ({ home: renderHome, menu: renderMenu, cart: renderCart, confirm: renderConfirm, history: renderHistory })[S.view]();
+    if (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm') saveCartDraft(); // 第 18 步
+    ({ home: renderHome, menu: renderMenu, cart: renderCart, confirm: renderConfirm, history: renderHistory, done: renderDone })[S.view]();
+    refreshCountdown();
   }
  
   $back.addEventListener('click', function () {
     if (S.view === 'confirm') return go('cart');
     if (S.view === 'cart') return go('menu');
-    if (S.view === 'menu' && cartChanged() && !window.confirm('購物車還沒送出，確定要離開嗎？')) return;
+    // 第 18 步：購物車已經存在手機裡，離開不用再確認，只提醒一下
+    if (S.view === 'menu' && S.menu && S.menu.session.open && S.cart.length && cartChanged()) toast('購物車已暫存，截止前記得回來送出');
     go('home');
   });
   $historyBtn.addEventListener('click', openHistory);
@@ -213,8 +223,9 @@
       return;
     }
     list = list.slice().sort(function (a, b) { return a.type === b.type ? 0 : (a.type === '餐點' ? -1 : 1); });
-    $view.innerHTML = hello + list.map(function (s) {
+    $view.innerHTML = hello + '<div id="cdHome"></div>' + list.map(function (s) {
       var o = s.myOrder;
+      var draftN = s.open ? draftCount(s.id) : 0; // 第 18 步：手機裡還沒送出的購物車
       var btns;
       var notice = s.notice ? '<div class="notice">公告：' + esc(s.notice) + '</div>' : '';
       // 第 7 步：取消的團
@@ -231,7 +242,7 @@
         btns = o
           ? '<button class="btn" data-act="cancel" data-id="' + esc(s.id) + '">取消訂單</button>' +
             '<button class="btn primary" data-act="menu" data-id="' + esc(s.id) + '">修改訂單</button>'
-          : '<button class="btn primary" data-act="menu" data-id="' + esc(s.id) + '">開始點餐</button>';
+          : '<button class="btn primary" data-act="menu" data-id="' + esc(s.id) + '">' + (draftN ? '繼續點餐' : '開始點餐') + '</button>';
       } else {
         btns = '<button class="btn" data-act="menu" data-id="' + esc(s.id) + '">看菜單</button>';
       }
@@ -241,6 +252,7 @@
         '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + notice +
         (o ? '<p class="small">你已點餐：<b>$' + o.total + '</b>　' + (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>') + '</p>'
            : '<p class="small muted">' + (s.open ? '你還沒點餐' : '你這團沒有點餐') + '</p>') +
+        (draftN ? '<p class="small cart-pending">🛒 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '還沒送出</p>' : '') +
         '<div class="btn-row">' + btns + '</div></div>';
     }).join('');
   }
@@ -262,6 +274,8 @@
         return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note, stale: !!l.stale, oldName: l.name };
       }) : [];
       S.cartStart = JSON.stringify(S.cart);
+      S.search = '';
+      restoreCartDraft(); // 第 18 步
       go('menu');
     }).catch(showError);
   }
@@ -294,27 +308,36 @@
     if (m.session.canceled) head += '<div class="notice">這一團已經取消，只能看菜單。</div>';
     else if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
  
+    if (m.session.open && !S.cart.length) head += lastOrderHtml(); // 第 18 步：上次在這家點的
+ 
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
       return '<button class="chip' + (i === 0 ? ' on' : '') + '" data-act="cat" data-i="' + i + '">' + esc(c) + '</button>';
     }).join('') + '</nav>' : '';
+    // 第 18 步：搜尋框和分類列一起固定在頂端
+    var tools = '<div class="menu-tools" id="menuTools"><div class="search">' +
+      '<input id="menuSearch" type="search" placeholder="搜尋品項，例如：雞腿、紅茶" autocomplete="off" value="' + esc(S.search || '') + '">' +
+      '<button class="search-clear" data-act="clearSearch" aria-label="清除搜尋"' + (S.search ? '' : ' hidden') + '>×</button></div>' +
+      chips + '</div>';
  
     var body = cats.map(function (c, ci) {
-      return '<h3 class="cat-title" id="cat' + ci + '">' + esc(c) + '</h3>' +
+      return '<h3 class="cat-title" id="cat' + ci + '" data-ci="' + ci + '">' + esc(c) + '</h3>' +
         m.items.filter(function (i) { return i.cat === c; }).map(function (i) {
-          return '<button class="item" data-act="item" data-id="' + esc(i.id) + '"' + (m.session.open ? '' : ' disabled') + '>' +
+          return '<button class="item" data-act="item" data-ci="' + ci + '" data-id="' + esc(i.id) + '" data-q="' + esc((i.name + ' ' + (i.desc || '')).toLowerCase()) + '"' + (m.session.open ? '' : ' disabled') + '>' +
             '<span><span class="name">' + esc(i.name) + '</span>' + (counts[i.id] ? '<span class="count">' + counts[i.id] + '</span>' : '') +
             (i.desc ? '<br><span class="desc">' + esc(i.desc) + '</span>' : '') + '</span>' +
             '<span class="price">$' + i.price + '</span></button>';
         }).join('');
     }).join('');
  
-    $view.innerHTML = head + chips + body;
+    $view.innerHTML = head + tools + body + '<p class="center muted" id="noMatch" hidden>找不到符合的品項</p>';
+    document.getElementById('menuSearch').addEventListener('input', function (e) { applySearch(e.target.value); });
+    if (S.search) applySearch(S.search); else spyCategory(); // 重畫後（例如加入購物車）分類標示跟著目前位置
     if (m.session.open) showCartBar('查看購物車', function () { go('cart'); }, !S.cart.length);
   }
  
   function showCartBar(label, onClick, disabled) {
     var n = S.cart.reduce(function (s, l) { return s + l.qty; }, 0);
-    $bottom.innerHTML = '<div class="inner"><div class="sum"><span class="small muted">共 ' + n + ' 份</span><br><b>$' + cartTotal() + '</b></div>' +
+    $bottom.innerHTML = '<div class="cd-bar" id="cdBar" hidden></div><div class="inner"><div class="sum"><span class="small muted">共 ' + n + ' 份</span><br><b>$' + cartTotal() + '</b></div>' +
       '<button class="btn primary" id="bottomBtn"' + (disabled ? ' disabled' : '') + '>' + esc(label) + '</button></div>';
     $bottom.hidden = false;
     document.getElementById('bottomBtn').onclick = onClick;
@@ -500,10 +523,15 @@
     var btn = document.getElementById('bottomBtn');
     btn.disabled = true; btn.textContent = '送出中…';
     var lines = S.cart.map(function (l) { return { itemId: l.itemId, optionIds: l.optionIds, qty: l.qty, note: l.note }; });
+    var sent = S.cart.slice();
     api('submit', { sessionId: S.menu.session.id, lines: lines }).then(function (r) {
       S.busy = false;
-      toast('訂單已送出，金額 $' + r.total);
-      return loadHome();
+      // 第 18 步：清掉暫存的購物車、記下「上次點的」，顯示已送出畫面
+      clearCartDraft(S.menu.session.id);
+      saveLastOrder(S.menu, sent);
+      S.done = { menu: S.menu, lines: sent, total: r.total, edited: !!S.menu.myOrder };
+      go('done');
+      return loadHome(true); // 背景更新首頁資料，不換畫面
     }).catch(function (e) {
       S.busy = false;
       btn.disabled = false; btn.textContent = S.menu.myOrder ? '確認修改' : '確認送出';
@@ -515,6 +543,7 @@
     if (!window.confirm('確定要取消這一團的訂單嗎？')) return;
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }).then(function () {
+      clearCartDraft(sessionId); // 第 18 步
       toast('訂單已取消');
       return loadHome();
     }).catch(showError);
@@ -549,6 +578,232 @@
     $view.innerHTML = html;
   }
  
+  /* ---------- 第 18 步：送出後的畫面 ---------- */
+ 
+  function renderDone() {
+    var d = S.done;
+    var m = d.menu;
+    $title.textContent = d.edited ? '訂單已修改' : '訂單已送出';
+    var next = ((S.home && S.home.sessions) || []).filter(function (s) {
+      return s.open && !s.canceled && !s.myOrder && s.id !== m.session.id;
+    })[0];
+    $view.innerHTML = '<div class="card done">' +
+      '<div class="done-mark" aria-hidden="true">✓</div>' +
+      '<h2 class="center-text">' + (d.edited ? '訂單已修改' : '訂單已送出') + '</h2>' +
+      '<p class="center-text small muted">' + esc(m.session.type) + '・' + esc(m.store.name) + '・訂購人 ' + esc(m.userName || '') + '</p>' +
+      d.lines.map(function (l, i) { return lineHtml(l, i, false); }).join('') +
+      '<div class="total-row"><span>總金額</span><span>$' + d.total + '</span></div></div>' +
+      '<div class="notice">' + esc(m.session.cutoff) + ' 截止前都可以回首頁修改或取消。餐點送到後再付錢給行政。</div>' +
+      (next ? '<button class="btn primary block" data-act="menu" data-id="' + esc(next.id) + '">接著點' + esc(next.type) + '：' + esc(next.storeName) + '</button><div style="height:8px"></div>' : '') +
+      '<button class="btn block" data-act="home">回首頁</button>';
+  }
+ 
+  /* ---------- 第 18 步：購物車暫存（存在這支手機，只限今天） ---------- */
+ 
+  var DRAFT_KEY = 'yk_cart_v1';
+ 
+  function readStore(key) {
+    try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (x) { return {}; }
+  }
+  function writeStore(key, obj) {
+    try { localStorage.setItem(key, JSON.stringify(obj)); } catch (x) {}
+  }
+ 
+  function readDrafts() {
+    var all = readStore(DRAFT_KEY);
+    var today = localToday();
+    Object.keys(all).forEach(function (k) { if (!all[k] || all[k].date !== today) delete all[k]; });
+    return all;
+  }
+ 
+  function plainLines(lines) {
+    return lines.map(function (l) {
+      var item = itemOf(l.itemId);
+      return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note || '', name: item ? item.name : (l.oldName || l.name || '') };
+    });
+  }
+ 
+  function saveCartDraft() {
+    if (!S.menu || !S.menu.session.open) return;
+    var all = readDrafts();
+    var id = S.menu.session.id;
+    if (S.cart.length && cartChanged()) all[id] = { date: localToday(), cart: plainLines(S.cart) };
+    else delete all[id];
+    writeStore(DRAFT_KEY, all);
+  }
+ 
+  function clearCartDraft(sessionId) {
+    var all = readDrafts();
+    delete all[sessionId];
+    writeStore(DRAFT_KEY, all);
+  }
+ 
+  function draftCount(sessionId) {
+    var d = readDrafts()[sessionId];
+    return d ? d.cart.reduce(function (s, l) { return s + (Number(l.qty) || 0); }, 0) : 0;
+  }
+ 
+  // 用現在的菜單檢查一行：品項還在、選項都還在、必選都選好，才算有效
+  function lineValid(l) {
+    var item = itemOf(l.itemId);
+    if (!item) return false;
+    var all = {};
+    groupsOf(item).forEach(function (g) { g.options.forEach(function (o) { all[o.id] = true; }); });
+    if (!(l.optionIds || []).every(function (id) { return all[id]; })) return false;
+    return groupsOf(item).every(function (g) { return groupOk(g, l.optionIds || []); });
+  }
+ 
+  function restoreCartDraft() {
+    var d = readDrafts()[S.menu.session.id];
+    if (!d || !S.menu.session.open) return;
+    S.cart = d.cart.map(function (l) {
+      return { itemId: l.itemId, optionIds: (l.optionIds || []).slice(), qty: Math.min(MAX_QTY, Math.max(1, Number(l.qty) || 1)),
+        note: l.note || '', stale: !lineValid(l), oldName: l.name };
+    });
+    toast('已帶回上次還沒送出的購物車');
+  }
+ 
+  /* ---------- 第 18 步：上次在這家點的（存在這支手機） ---------- */
+ 
+  var LAST_KEY = 'yk_last_v1';
+ 
+  function saveLastOrder(menu, lines) {
+    var all = readStore(LAST_KEY);
+    all[menu.store.name] = { date: menu.session.date || localToday(), lines: plainLines(lines.filter(function (l) { return !l.stale; })) };
+    var keys = Object.keys(all).sort(function (a, b) { return all[a].date < all[b].date ? 1 : -1; });
+    keys.slice(40).forEach(function (k) { delete all[k]; }); // 最多記 40 家
+    writeStore(LAST_KEY, all);
+  }
+ 
+  function lastOrder() {
+    var r = readStore(LAST_KEY)[S.menu.store.name];
+    return r && r.lines && r.lines.length ? r : null;
+  }
+ 
+  function lastOrderHtml() {
+    var r = lastOrder();
+    if (!r) return '';
+    var md = String(r.date).split('-');
+    var when = md.length === 3 ? (+md[1]) + '/' + (+md[2]) : esc(r.date);
+    return '<div class="card reorder"><div class="row"><b>上次在這家點的</b><span class="small muted">' + when + '</span></div>' +
+      '<p class="small" style="margin:6px 0 0">' + r.lines.map(function (l) {
+        return esc(l.name) + ' × ' + l.qty + (l.note ? '（' + esc(l.note) + '）' : '');
+      }).join('、') + '</p>' +
+      '<div class="btn-row"><button class="btn" data-act="reorder">一鍵加入購物車</button></div></div>';
+  }
+ 
+  function addLastOrder() {
+    var r = lastOrder();
+    if (!r) return;
+    var ok = 0, bad = 0;
+    r.lines.forEach(function (l) {
+      if (!lineValid(l)) { bad++; return; }
+      S.cart.push({ itemId: l.itemId, optionIds: l.optionIds.slice(), qty: Math.min(MAX_QTY, Math.max(1, Number(l.qty) || 1)), note: l.note || '', stale: false });
+      ok++;
+    });
+    if (!ok) return toast('上次點的品項都已下架或變動，請重新選');
+    toast('已加入 ' + ok + ' 項' + (bad ? '，有 ' + bad + ' 項菜單已變動沒有加入' : '') + '，價格以今天菜單為準');
+    render();
+  }
+ 
+  /* ---------- 第 18 步：菜單搜尋、分類自動標示 ---------- */
+ 
+  function applySearch(q) {
+    S.search = q;
+    var words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    var shown = {}, any = false;
+    $view.querySelectorAll('.item[data-q]').forEach(function (el) {
+      var hit = words.every(function (w) { return el.dataset.q.indexOf(w) >= 0; });
+      el.hidden = !hit;
+      if (hit) { shown[el.dataset.ci] = true; any = true; }
+    });
+    $view.querySelectorAll('.cat-title').forEach(function (el) { el.hidden = !shown[el.dataset.ci]; });
+    $view.querySelectorAll('.chip').forEach(function (el) { el.hidden = !shown[el.dataset.i]; });
+    var nm = document.getElementById('noMatch');
+    if (nm) nm.hidden = any;
+    var cb = $view.querySelector('.search-clear');
+    if (cb) cb.hidden = !words.length;
+    spyCategory();
+  }
+ 
+  function stickyBottom() {
+    var el = document.getElementById('menuTools');
+    return 52 + (el ? el.offsetHeight : 0);
+  }
+ 
+  function spyCategory() {
+    if (S.view !== 'menu' || Date.now() < (S.spyPause || 0)) return;
+    var titles = [].filter.call($view.querySelectorAll('.cat-title'), function (t) { return !t.hidden; });
+    if (!titles.length) return;
+    var line = stickyBottom() + 12;
+    var cur = titles[0];
+    titles.forEach(function (t) { if (t.getBoundingClientRect().top <= line) cur = t; });
+    var nav = $view.querySelector('.cats');
+    if (!nav) return;
+    var chip = nav.querySelector('.chip[data-i="' + cur.dataset.ci + '"]');
+    if (!chip || chip.classList.contains('on')) return;
+    nav.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('on', c === chip); });
+    nav.scrollLeft = chip.offsetLeft - nav.clientWidth / 2 + chip.offsetWidth / 2;
+  }
+ 
+  var spyTick = false;
+  window.addEventListener('scroll', function () {
+    if (spyTick || S.view !== 'menu') return;
+    spyTick = true;
+    requestAnimationFrame(function () { spyTick = false; spyCategory(); });
+  }, { passive: true });
+ 
+  /* ---------- 第 18 步：截止倒數 ---------- */
+ 
+  // 截止時間是台灣時間（Asia/Taipei），用 +08:00 算，手機時區設錯也不影響
+  function minutesLeft(date, cutoff) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !/^\d{2}:\d{2}$/.test(cutoff || '')) return null;
+    return (new Date(date + 'T' + cutoff + ':00+08:00').getTime() - Date.now()) / 60000;
+  }
+ 
+  function leftText(m) { return m < 1 ? '不到 1 分鐘' : Math.ceil(m) + ' 分鐘'; }
+ 
+  var reloadedAtCutoff = {};
+ 
+  function refreshCountdown() {
+    var homeEl = document.getElementById('cdHome');
+    if (homeEl && S.view === 'home' && S.home) {
+      var rows = [];
+      (S.home.sessions || []).forEach(function (s) {
+        if (!s.open || s.canceled) return;
+        var left = minutesLeft(S.home.today, s.cutoff);
+        if (left == null) return;
+        if (left <= 0) {
+          // 到截止時間了：重新讀一次首頁，按鈕會變成「看菜單」
+          if (!reloadedAtCutoff[s.id]) { reloadedAtCutoff[s.id] = true; loadHome(true); }
+          return;
+        }
+        if (left > WARN_MIN) return;
+        var tail = draftCount(s.id) ? '，購物車還沒送出' : (s.myOrder ? '' : '，你還沒點餐');
+        rows.push('⏰ ' + esc(s.type) + '「' + esc(s.storeName) + '」剩 <b>' + leftText(left) + '</b> 截止' + tail);
+      });
+      homeEl.innerHTML = rows.length ? '<div class="cd-banner">' + rows.join('<br>') + '</div>' : '';
+    }
+    var barEl = document.getElementById('cdBar');
+    if (barEl) {
+      var msg = '';
+      var ss = S.menu && S.menu.session;
+      if (ss && ss.open && (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm')) {
+        var l2 = minutesLeft(ss.date, ss.cutoff);
+        if (l2 != null && l2 <= 0) msg = '⏰ 已到截止時間，可能無法送出';
+        else if (l2 != null && l2 <= WARN_MIN) {
+          msg = '⏰ 剩 <b>' + leftText(l2) + '</b> 截止' +
+            (S.view === 'confirm' ? '，請盡快按送出' : (S.cart.length && cartChanged() ? '，購物車還沒送出' : ''));
+        }
+      }
+      barEl.innerHTML = msg;
+      barEl.hidden = !msg;
+    }
+  }
+ 
+  setInterval(refreshCountdown, 20000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshCountdown(); });
+ 
   /* ---------- 頁面上的按鈕 ---------- */
  
   $view.addEventListener('click', function (e) {
@@ -569,10 +824,19 @@
       case 'edit': return openItem(S.cart[+d.i].itemId, +d.i);
       case 'del': S.cart.splice(+d.i, 1); return render();
       case 'back': return go('menu');
+      case 'home': return go('home');
+      case 'reorder': return addLastOrder();
+      case 'clearSearch': {
+        var inp = document.getElementById('menuSearch');
+        inp.value = ''; applySearch(''); return;
+      }
       case 'cat': {
         document.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('on', c === b); });
         var t = document.getElementById('cat' + d.i);
-        if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - 110, behavior: 'smooth' });
+        if (t) {
+          S.spyPause = Date.now() + 800; // 平滑捲動途中不要讓自動標示搶著換
+          window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - stickyBottom() - 4, behavior: 'smooth' });
+        }
         return;
       }
     }
