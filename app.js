@@ -21,6 +21,8 @@
  * 第 25 步：
  *   - 首次使用導覽：核准後第一次打開首頁跳出 3 頁說明（看過記在這支手機），首頁最下面「使用說明」可以再看一次；代點時不跳。
  *   - 改單提示：首頁已點餐的卡片寫「幾點截止前都可以修改或取消」，截止後寫「已截止，要更改請找行政」；取消確認多一句說明。
+ * 第 29 步：首頁不顯示已取消的團，只留可以點餐或已截止的店；全部都取消時顯示「今天沒有可以點餐的店」。
+ *   （取消前點的單仍在「我的訂單」標「開團取消」。）
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -307,9 +309,10 @@
       return;
     }
  
-    var list = S.home.sessions || [];
+    var all = S.home.sessions || [];
+    var list = all.filter(function (s) { return !s.canceled; }); // 第 29 步：已取消的團不顯示
     if (!list.length) {
-      $view.innerHTML = hello + proxyPicker() + '<div class="card center"><p>今天還沒有開團。</p><button class="btn" data-act="reload">重新整理</button></div>' + guideLink();
+      $view.innerHTML = hello + proxyPicker() + '<div class="card center"><p>' + (all.length ? '今天沒有可以點餐的店。' : '今天還沒有開團。') + '</p><button class="btn" data-act="reload">重新整理</button></div>' + guideLink();
       maybeShowGuide(); // 第 25 步
       return;
     }
