@@ -18,6 +18,9 @@
  *   - 行政（Users「角色」＝行政）首頁上方多一列「幫誰點」，選了人之後首頁、菜單、購物車、訂單都是那個人的。
  *   - 幫別人點的時候畫面上方一直有黃色提示；購物車暫存分開存，「上次在這家點的」不顯示也不記。
  *   - 截止後行政還能補單、改單、取消（只限當天），送出前多確認一次。
+ * 第 25 步：
+ *   - 首次使用導覽：核准後第一次打開首頁跳出 3 頁說明（看過記在這支手機），首頁最下面「使用說明」可以再看一次；代點時不跳。
+ *   - 改單提示：首頁已點餐的卡片寫「幾點截止前都可以修改或取消」，截止後寫「已截止，要更改請找行政」；取消確認多一句說明。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -55,6 +58,61 @@
   $proxy.addEventListener('click', function (e) {
     if (e.target.closest('[data-act="proxyOff"]')) setProxy('', '');
   });
+ 
+  /* ---------- 第 25 步：首次使用導覽（只有文字；看過記在這支手機） ---------- */
+ 
+  var GUIDE_KEY = 'yk_guide_v1';
+  var GUIDE_PAGES = [
+    { h: '選今天的店', p: '每天會開一家餐點、一家飲料。在首頁找到想點的店，按「開始點餐」。' },
+    { h: '選品項、送出', p: '點品項、選好選項後加進購物車。看一下購物車，最後按「確認送出」就完成了。' },
+    { h: '截止前都可以改', p: '截止前都可以回首頁「修改訂單」或「取消訂單」。餐點送到後，再付錢給行政。' }
+  ];
+  var $guide = document.createElement('div');
+  $guide.className = 'guide-wrap';
+  $guide.hidden = true;
+  document.body.appendChild($guide);
+  var guidePage = 0;
+ 
+  function guideSeen() { try { return !!localStorage.getItem(GUIDE_KEY); } catch (x) { return true; } }
+  function markGuideSeen() { try { localStorage.setItem(GUIDE_KEY, '1'); } catch (x) {} }
+ 
+  function openGuide() { guidePage = 0; renderGuide(); $guide.hidden = false; }
+  function closeGuide() { $guide.hidden = true; markGuideSeen(); }
+  function maybeShowGuide() {
+    if (S.forId || !$guide.hidden || guideSeen()) return;
+    openGuide();
+  }
+ 
+  function renderGuide() {
+    var g = GUIDE_PAGES[guidePage];
+    var last = guidePage === GUIDE_PAGES.length - 1;
+    $guide.innerHTML = '<div class="sheet-backdrop"></div>' +
+      '<section class="guide" role="dialog" aria-modal="true" aria-labelledby="guideTitle">' +
+      '<p class="small muted guide-step">使用說明 ' + (guidePage + 1) + ' / ' + GUIDE_PAGES.length + '</p>' +
+      '<h2 id="guideTitle">' + esc(g.h) + '</h2>' +
+      '<p>' + esc(g.p) + '</p>' +
+      '<div class="guide-dots" aria-hidden="true">' + GUIDE_PAGES.map(function (x, i) {
+        return '<span class="' + (i === guidePage ? 'on' : '') + '"></span>';
+      }).join('') + '</div>' +
+      '<div class="btn-row">' +
+      (last ? '' : '<button class="btn" data-gact="skip">略過</button>') +
+      (guidePage ? '<button class="btn" data-gact="prev">上一步</button>' : '') +
+      '<button class="btn primary" data-gact="' + (last ? 'done' : 'next') + '">' + (last ? '開始使用' : '下一步') + '</button>' +
+      '</div></section>';
+  }
+ 
+  $guide.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-gact]');
+    if (!b) return;
+    var a = b.getAttribute('data-gact');
+    if (a === 'next') { guidePage++; return renderGuide(); }
+    if (a === 'prev') { guidePage--; return renderGuide(); }
+    closeGuide();
+  });
+ 
+  function guideLink() {
+    return S.forId ? '' : '<p class="center-text guide-link"><button class="link-btn" data-act="guide">使用說明</button></p>';
+  }
  
   var PROXY_ACTIONS = { init: true, menu: true, submit: true, cancel: true, history: true };
  
@@ -251,7 +309,8 @@
  
     var list = S.home.sessions || [];
     if (!list.length) {
-      $view.innerHTML = hello + proxyPicker() + '<div class="card center"><p>今天還沒有開團。</p><button class="btn" data-act="reload">重新整理</button></div>';
+      $view.innerHTML = hello + proxyPicker() + '<div class="card center"><p>今天還沒有開團。</p><button class="btn" data-act="reload">重新整理</button></div>' + guideLink();
+      maybeShowGuide(); // 第 25 步
       return;
     }
     list = list.slice().sort(function (a, b) { return a.type === b.type ? 0 : (a.type === '餐點' ? -1 : 1); });
@@ -287,8 +346,18 @@
         (o ? '<p class="small">' + esc(who) + '已點餐：<b>$' + o.total + '</b>　' + (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>') + '</p>'
            : '<p class="small muted">' + esc(who) + (s.open ? '還沒點餐' : '這團沒有點餐') + '</p>') +
         (draftN ? '<p class="small cart-pending">🛒 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '還沒送出</p>' : '') +
+        editHint(s, o) + // 第 25 步
         '<div class="btn-row">' + btns + '</div></div>';
-    }).join('');
+    }).join('') + guideLink();
+    maybeShowGuide(); // 第 25 步
+  }
+ 
+  // 第 25 步：已點餐時，按鈕上方說明還能不能改
+  function editHint(s, o) {
+    if (!o) return '';
+    if (s.late) return '<p class="small edit-hint">已截止，行政可以補單或更改</p>';
+    if (s.open) return '<p class="small edit-hint">' + esc(s.cutoff) + ' 截止前都可以修改或取消</p>';
+    return '<p class="small edit-hint muted">已截止，要更改請找行政</p>';
   }
  
   /* ---------- 菜單 ---------- */
@@ -578,7 +647,7 @@
   }
  
   function cancelOrder(sessionId) {
-    if (!window.confirm(S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？')) return;
+    if (!window.confirm(S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。')) return; // 第 25 步
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }).then(function () {
       clearCartDraft(sessionId); // 第 18 步
@@ -869,6 +938,7 @@
       case 'back': return go('menu');
       case 'home': return go('home');
       case 'reorder': return addLastOrder();
+      case 'guide': return openGuide(); // 第 25 步
       case 'clearSearch': {
         var inp = document.getElementById('menuSearch');
         inp.value = ''; applySearch(''); return;
