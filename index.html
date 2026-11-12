@@ -1,65 +1,42 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  
-<meta charset="utf-8">
-  
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  
-<title>YK中午吃什麼-點餐系統</title>
-  
-<!-- 第 37 步：檔名後面的 ?v=38 是版本號（第 38 步換成 38）。之後改了 app.js 或 style.css，這裡三個號碼都要換新（例如 ?v=39），LINE 才會重新下載 -->
-  
-<link rel="stylesheet" href="style.css?v=38">
-  
-<!-- 第 16 步：先和 Apps Script、LINE 的伺服器建立連線，第一次呼叫會快一點 -->
-  
-<link rel="preconnect" href="https://script.google.com">
-  
-<link rel="preconnect" href="https://script.googleusercontent.com">
-  
-<link rel="preconnect" href="https://api.line.me">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>YK中午吃什麼-點餐系統</title>
+  <!-- 第 37 步：檔名後面的 ?v=40 是版本號（第 40 步換成 40）。之後改了 app.js 或 style.css，這裡三個號碼都要換新（例如 ?v=41），LINE 才會重新下載 -->
+  <link rel="stylesheet" href="style.css?v=40">
+  <!-- 第 16 步：先和 Apps Script、LINE 的伺服器建立連線，第一次呼叫會快一點 -->
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com">
+  <link rel="preconnect" href="https://api.line.me">
 </head>
 <body>
-  
-<header class="topbar">
-    
-<button id="backBtn" class="icon-btn" hidden aria-label="返回">‹</button>
-    
-<h1 id="title">YK中午吃什麼-點餐系統</h1>
-    
-<button id="historyBtn" class="link-btn" hidden>我的訂單</button>
-  
-</header>
-  
-<main id="view" aria-live="polite">
-    
-<div class="center muted">載入中…</div>
-  
-</main>
-  
-<div id="bottom" class="bottom-bar" hidden></div>
-  
-<!-- 品項選項視窗 -->
-  
-<div id="sheet" class="sheet-wrap" hidden>
-    
-<div class="sheet-backdrop" data-close></div>
-    
-<section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-      
-<div id="sheetBody"></div>
-    
-</section>
-  
-</div>
-  
-<div id="toast" class="toast" hidden></div>
-  
-<script src="config.js?v=38"></script>
-  
-<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-  
-<script src="app.js?v=38"></script>
+  <header class="topbar">
+    <button id="backBtn" class="icon-btn" hidden aria-label="返回">‹</button>
+    <h1 id="title">YK中午吃什麼-點餐系統</h1>
+    <button id="historyBtn" class="link-btn" hidden>我的訂單</button>
+  </header>
+ 
+  <main id="view" aria-live="polite">
+    <div class="center muted">載入中…</div>
+  </main>
+ 
+  <div id="bottom" class="bottom-bar" hidden></div>
+ 
+  <!-- 品項選項視窗 -->
+  <div id="sheet" class="sheet-wrap" hidden>
+    <div class="sheet-backdrop" data-close></div>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div id="sheetBody"></div>
+    </section>
+  </div>
+ 
+  <div id="toast" class="toast" hidden></div>
+ 
+  <script src="config.js?v=40"></script>
+  <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <script src="app.js?v=40"></script>
 </body>
 </html>
+ 
