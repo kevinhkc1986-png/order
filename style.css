@@ -230,3 +230,21 @@ body.proxying .cd-banner { top: 100px; }
   border-radius: 10px; padding: 8px 12px; margin: 8px 0 0; font-size: 15px; font-weight: 600;
 }
  
+/* ===== 第 40 步：點餐頁小改善 ===== */
+/* 品項視窗：加入按鈕固定在視窗底部（選項很多也不用捲到最下面） */
+.sheet { padding-bottom: 0; }
+.sheet-foot {
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--card); margin: 12px -16px 0; padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+}
+/* 還沒付的單：灰色「待付款」／已付差額 */
+.tag.due { background: var(--line); color: var(--muted); }
+/* 截止後送不出 */
+.notice.late-fail { font-size: 15px; border: 1px solid #f5c26b; }
+.copy-box {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 8px; padding: 8px;
+  font-size: 14px; line-height: 22px; border: 1px solid #ccc; border-radius: 8px; background: #fff; resize: none;
+}
+.copy-box[hidden] { display: none; }
+ 
