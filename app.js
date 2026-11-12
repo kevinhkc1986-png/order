@@ -23,6 +23,11 @@
  *   - 改單提示：首頁已點餐的卡片寫「幾點截止前都可以修改或取消」，截止後寫「已截止，要更改請找行政」；取消確認多一句說明。
  * 第 29 步：首頁不顯示已取消的團，只留可以點餐或已截止的店；全部都取消時顯示「今天沒有可以點餐的店」。
  *   （取消前點的單仍在「我的訂單」標「開團取消」。）
+ * 第 31 步（讓同仁記得按送出）：
+ *   - 拿掉「確認訂單」頁，從 3 步減成 2 步：查看購物車 → 送出訂單。
+ *   - 購物車頁最上面黃色提示「還沒送出」，底部改成全寬大按鈕「送出訂單 $金額」；店名、截止時間、訂購人移到購物車頁。
+ *   - 首頁有購物車還沒送出時，改成紅色框提醒。
+ *   - 使用說明第 2 頁改文字；說明的記號改成 yk_guide_v2，所以每個人下次打開首頁會再跳出一次說明。
  * 在 LINE 裡用 LIFF 開啟，資料讀寫都透過 Apps Script（Api.gs）。
  */
 (function () {
@@ -63,10 +68,10 @@
  
   /* ---------- 第 25 步：首次使用導覽（只有文字；看過記在這支手機） ---------- */
  
-  var GUIDE_KEY = 'yk_guide_v1';
+  var GUIDE_KEY = 'yk_guide_v2'; // 第 31 步：說明改了，讓大家再看一次
   var GUIDE_PAGES = [
     { h: '選今天的店', p: '每天會開一家餐點、一家飲料。在首頁找到想點的店，按「開始點餐」。' },
-    { h: '選品項、送出', p: '點品項、選好選項後加進購物車。看一下購物車，最後按「確認送出」就完成了。' },
+    { h: '選品項、送出', p: '點品項、選好選項後加進購物車，再按「查看購物車」。最後一定要按綠色大按鈕「送出訂單」，看到大勾勾「訂單已送出」才算點好。' },
     { h: '截止前都可以改', p: '截止前都可以回首頁「修改訂單」或「取消訂單」。餐點送到後，再付錢給行政。' }
   ];
   var $guide = document.createElement('div');
@@ -268,12 +273,12 @@
     $bottom.hidden = true;
     renderProxyBanner(); // 第 20 步
     if (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm') saveCartDraft(); // 第 18 步
-    ({ home: renderHome, menu: renderMenu, cart: renderCart, confirm: renderConfirm, history: renderHistory, done: renderDone })[S.view]();
+    if (S.view === 'confirm') S.view = 'cart'; // 第 31 步：確認頁已拿掉，併進購物車
+    ({ home: renderHome, menu: renderMenu, cart: renderCart, history: renderHistory, done: renderDone })[S.view]();
     refreshCountdown();
   }
  
   $back.addEventListener('click', function () {
-    if (S.view === 'confirm') return go('cart');
     if (S.view === 'cart') return go('menu');
     // 第 18 步：購物車已經存在手機裡，離開不用再確認，只提醒一下
     if (S.view === 'menu' && S.menu && S.menu.session.open && S.cart.length && cartChanged()) toast('購物車已暫存，截止前記得回來送出');
@@ -348,7 +353,7 @@
         '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + notice +
         (o ? '<p class="small">' + esc(who) + '已點餐：<b>$' + o.total + '</b>　' + (o.paid ? '<span class="tag open">已付款</span>' : '<span class="tag warn">未付款</span>') + '</p>'
            : '<p class="small muted">' + esc(who) + (s.open ? '還沒點餐' : '這團沒有點餐') + '</p>') +
-        (draftN ? '<p class="small cart-pending">🛒 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '還沒送出</p>' : '') +
+        (draftN ? '<div class="cart-pending">⚠ 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '<b>還沒送出</b>，按「' + (o ? '修改訂單' : '繼續點餐') + '」→「送出訂單」才算點好</div>' : '') + // 第 31 步：紅框
         editHint(s, o) + // 第 25 步
         '<div class="btn-row">' + btns + '</div></div>';
     }).join('') + guideLink();
@@ -443,10 +448,11 @@
     if (m.session.open) showCartBar('查看購物車', function () { go('cart'); }, !S.cart.length);
   }
  
-  function showCartBar(label, onClick, disabled) {
+  function showCartBar(label, onClick, disabled, wide) {
     var n = S.cart.reduce(function (s, l) { return s + l.qty; }, 0);
-    $bottom.innerHTML = '<div class="cd-bar" id="cdBar" hidden></div><div class="inner"><div class="sum"><span class="small muted">共 ' + n + ' 份</span><br><b>$' + cartTotal() + '</b></div>' +
-      '<button class="btn primary" id="bottomBtn"' + (disabled ? ' disabled' : '') + '>' + esc(label) + '</button></div>';
+    $bottom.innerHTML = '<div class="cd-bar" id="cdBar" hidden></div><div class="inner">' +
+      (wide ? '' : '<div class="sum"><span class="small muted">共 ' + n + ' 份</span><br><b>$' + cartTotal() + '</b></div>') + // 第 31 步：購物車頁只放一顆全寬大按鈕
+      '<button class="btn primary' + (wide ? ' send-big' : '') + '" id="bottomBtn"' + (disabled ? ' disabled' : '') + '>' + esc(label) + '</button></div>';
     $bottom.hidden = false;
     document.getElementById('bottomBtn').onclick = onClick;
   }
@@ -594,35 +600,30 @@
       '</div>';
   }
  
+  // 第 31 步：購物車就是最後一步，底部大按鈕直接送出（原本的「確認訂單」頁拿掉）
+  function sendLabel() {
+    return (S.menu && S.menu.myOrder ? '送出修改' : '送出訂單') + ' $' + cartTotal();
+  }
+ 
   function renderCart() {
+    var m = S.menu;
     $title.textContent = '購物車';
     if (!S.cart.length) {
       $view.innerHTML = '<div class="card center"><p>購物車是空的。</p><button class="btn" data-act="back">回菜單</button></div>';
     } else {
-      $view.innerHTML = '<div class="card">' + S.cart.map(function (l, i) { return lineHtml(l, i, true); }).join('') +
-        '<div class="total-row"><span>合計</span><span>$' + cartTotal() + '</span></div></div>' +
+      $view.innerHTML = (S.forId ? '<div class="notice">這張單會記在 <b>' + esc(S.forName) + '</b> 名下，並註明是行政代點。</div>' : '') + // 第 20 步
+        '<div class="notice unsent">⚠ 還沒送出喔！確認品項和金額後，按下方「' + (m.myOrder ? '送出修改' : '送出訂單') + '」才算點好。</div>' +
+        '<div class="card"><div class="row"><h2>' + esc(m.store.name) + '</h2><span class="tag type">' + esc(m.session.type) + '</span></div>' +
+        '<p class="small muted">' + esc(m.session.date) + '・' + esc(m.session.cutoff) + ' 截止・訂購人 ' + esc(m.userName || '') + '</p>' +
+        S.cart.map(function (l, i) { return lineHtml(l, i, true); }).join('') +
+        '<div class="total-row"><span>總金額</span><span>$' + cartTotal() + '</span></div></div>' +
         (isWhole(cartTotal()) ? '' : '<div class="notice">' + wholeMsg() + '才能送出。</div>') +
-        '<button class="btn block" data-act="back">＋ 繼續加點</button>';
+        '<button class="btn block" data-act="back">＋ 繼續加點</button>' +
+        '<p class="small muted center-text">送出後，截止前仍可回首頁修改或取消。</p>';
     }
     var stale = S.cart.some(function (l) { return l.stale; });
     var odd = !isWhole(cartTotal());
-    showCartBar(stale ? '請先處理標示的品項' : (odd ? '金額需為整數' : '下一步：確認'), function () { go('confirm'); }, !S.cart.length || stale || odd);
-  }
- 
-  /* ---------- 確認送出 ---------- */
- 
-  function renderConfirm() {
-    var m = S.menu;
-    $title.textContent = '確認訂單';
-    $view.innerHTML = (S.forId ? '<div class="notice">這張單會記在 <b>' + esc(S.forName) + '</b> 名下，並註明是行政代點。</div>' : '') + // 第 20 步
-      '<div class="notice">請再確認一次品項和金額，送出後截止前仍可修改或取消。</div>' +
-      '<div class="card"><div class="row"><h2>' + esc(m.store.name) + '</h2><span class="tag type">' + esc(m.session.type) + '</span></div>' +
-      '<p class="small muted">' + esc(m.session.date) + '・' + esc(m.session.cutoff) + ' 截止・訂購人 ' + esc(m.userName || '') + '</p>' +
-      S.cart.map(function (l, i) { return lineHtml(l, i, false); }).join('') +
-      '<div class="total-row"><span>總金額</span><span>$' + cartTotal() + '</span></div></div>' +
-      (isWhole(cartTotal()) ? '' : '<div class="notice">' + wholeMsg() + '才能送出。</div>');
-    var odd = !isWhole(cartTotal());
-    showCartBar(odd ? '金額需為整數' : (m.myOrder ? '確認修改' : '確認送出'), submitOrder, S.busy || odd);
+    showCartBar(stale ? '請先處理標示的品項' : (odd ? '金額需為整數' : sendLabel()), submitOrder, !S.cart.length || stale || odd || S.busy, true);
   }
  
   function submitOrder() {
@@ -644,7 +645,7 @@
       return loadHome(true); // 背景更新首頁資料，不換畫面
     }).catch(function (e) {
       S.busy = false;
-      btn.disabled = false; btn.textContent = S.menu.myOrder ? '確認修改' : '確認送出';
+      btn.disabled = false; btn.textContent = sendLabel(); // 第 31 步
       alertMsg(e.message);
     });
   }
@@ -903,12 +904,12 @@
     if (barEl) {
       var msg = '';
       var ss = S.menu && S.menu.session;
-      if (ss && ss.open && !ss.late && (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm')) {
+      if (ss && ss.open && !ss.late && (S.view === 'menu' || S.view === 'cart')) {
         var l2 = minutesLeft(ss.date, ss.cutoff);
         if (l2 != null && l2 <= 0) msg = '⏰ 已到截止時間，可能無法送出';
         else if (l2 != null && l2 <= WARN_MIN) {
           msg = '⏰ 剩 <b>' + leftText(l2) + '</b> 截止' +
-            (S.view === 'confirm' ? '，請盡快按送出' : (S.cart.length && cartChanged() ? '，購物車還沒送出' : ''));
+            (S.view === 'cart' && S.cart.length ? '，請盡快按「送出訂單」' : (S.cart.length && cartChanged() ? '，購物車還沒送出' : '')); // 第 31 步
         }
       }
       barEl.innerHTML = msg;
