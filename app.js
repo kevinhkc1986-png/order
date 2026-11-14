@@ -595,6 +595,7 @@
     if (!$sheet.hidden) return askCloseSheet(); // 第 40 步：有改過才問；不放棄的話 popstate 會再放一筆記號
     if (S.err) { S.view = 'loading'; return loadHome(); } // 錯誤畫面：跟按「回首頁」一樣
     if (S.view === 'cart') return go('menu');
+    if (S.view === 'feedback' && S.fbFrom === 'menu' && S.menu) return go('menu'); // 修正 2
     if (S.view === 'home') return;
     // 菜單、我的訂單、送出成功、讀取中 → 首頁
     if (S.view === 'menu' && S.menu && S.menu.session.open && S.cart.length && cartChanged()) toast('購物車已暫存，截止前記得回來送出');
@@ -610,12 +611,13 @@
 
   $back.addEventListener('click', function () {
     if (S.view === 'cart') return go('menu');
+    if (S.view === 'feedback' && S.fbFrom === 'menu' && S.menu) return go('menu'); // 修正 2：從菜單頁來的回菜單
     // 第 18 步：購物車已經存在手機裡，離開不用再確認，只提醒一下
     if (S.view === 'menu' && S.menu && S.menu.session.open && S.cart.length && cartChanged()) toast('購物車已暫存，截止前記得回來送出');
     go('home');
   });
   $historyBtn.addEventListener('click', openHistory);
-  $fbBtn.addEventListener('click', openFeedback); // 第 49 步
+  $fbBtn.addEventListener('click', function () { S.fbFrom = 'home'; openFeedback(); }); // 第 49 步（修正 2：記得從哪裡來）
 
   /* ---------- 第 42 步：等待核准時自動檢查 ---------- */
 
@@ -859,6 +861,10 @@
     if (!d) { $view.innerHTML = '<div class="center muted">讀取中…</div>'; return; }
     FB_MAX = d.max || FB_MAX;
     var f = S.fbForm;
+    if (f.type === '菜單錯誤' && !f.storeId && f.storeName) { // 修正 2：從菜單頁來，用店名找
+      var hit = d.stores.filter(function (s) { return s.name === f.storeName; })[0];
+      if (hit) f.storeId = hit.id;
+    }
     if (f.type === '菜單錯誤' && !f.storeId && d.stores.length) f.storeId = d.stores[0].id;
     var types = ['意見回饋', '菜單錯誤'].map(function (t) {
       return '<button class="chip' + (f.type === t ? ' on' : '') + '" data-act="fbType" data-type="' + t + '">' + t + '</button>';
@@ -919,7 +925,9 @@
       html += '<button class="btn block" data-act="fbMore" style="margin-bottom:12px">看更早的回報（' + hidden.length + ' 筆）' +
         (hiddenNew ? '<span class="fb-new">有更新</span>' : '') + '</button>';
     }
-    html += '<button class="btn block" data-act="home" style="margin-top:4px">回首頁</button>';
+    html += (S.fbFrom === 'menu' && S.menu) // 修正 2：從菜單頁來的回菜單
+      ? '<button class="btn block" data-act="back" style="margin-top:4px">回菜單</button>'
+      : '<button class="btn block" data-act="home" style="margin-top:4px">回首頁</button>';
     $view.innerHTML = html;
   }
 
@@ -1163,6 +1171,8 @@
     else if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
 
     if (m.session.late) head += '<div class="notice">這一團已經截止，你是行政，可以幫忙補單或改單。</div>';
+    // 第 49 步修正 2：看得到意見回饋的人，菜單頁多一個「回報這家菜單」（自動帶店名、類型菜單錯誤）
+    if (S.home && S.home.fb && !S.forId) head += '<p class="fb-menu-link"><button class="link-btn" data-act="fbMenu">回報這家菜單有錯</button></p>';
     if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示）
 
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
@@ -1788,6 +1798,11 @@
       case 'fbAskOpen': { S.fbAsk = { id: d.id, text: '' }; renderFeedback(); var t = document.getElementById('fbAskText'); if (t) t.focus(); return; }
       case 'fbAskCancel': { S.fbAsk = null; return renderFeedback(); }
       case 'fbMore': { S.fbAll = true; return renderFeedback(); }
+      case 'fbMenu': { // 修正 2：從菜單頁回報這家
+        S.fbForm = { type: '菜單錯誤', storeId: '', storeName: S.menu ? S.menu.store.name : '', text: '' };
+        S.fbFrom = 'menu';
+        return openFeedback();
+      }
       case 'fbAskSend': return fbAskSend(d.id);
       case 'clearSearch': {
         var inp = document.getElementById('menuSearch');
