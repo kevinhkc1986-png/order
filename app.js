@@ -492,7 +492,7 @@
   /* ---------- 第 47 步：速度記錄（連點頁首標題 5 下打開） ---------- */
 
   var SPEED_KEY = 'yk_speed_v1';
-  var ACT_NAMES = { init: '首頁', menu: '菜單', submit: '送單', cancel: '取消', history: '我的訂單', apply: '申請', voteInfo: '投票頁', vote: '投票', feedbackList: '意見回饋', feedbackSend: '送出意見' };
+  var ACT_NAMES = { init: '首頁', menu: '菜單', submit: '送單', cancel: '取消', history: '我的訂單', apply: '申請', voteInfo: '投票頁', vote: '投票', feedbackList: '意見回饋', feedbackSend: '送出意見', feedbackAck: '確認回覆', feedbackAsk: '補充問題' };
 
   function nowMs() { return window.performance && performance.now ? performance.now() : Date.now(); }
 
@@ -829,9 +829,13 @@
   var FB_MAX = 300;
   S.fbForm = { type: '意見回饋', storeId: '', text: '' };
   S.fb = null; // feedbackList 回傳：items、stores
+  S.fbAsk = null; // 修正 1：正在填「還有問題」的那筆 { id, text }
+  S.fbAll = false; // 修正 1：我的回報預設只顯示最新 3 筆，按「看更早的回報」才全部顯示
+  var FB_SHOW = 3;
 
   function openFeedback() {
     if (S.forId) return;
+    S.fbAll = false; // 每次進來都先只看最新 3 筆
     if (S.fb) go('feedback'); else { setLoading('讀取中…'); S.view = 'feedback'; }
     api('feedbackList').then(function (d) {
       S.fb = d;
@@ -878,17 +882,43 @@
 
     html += '<div class="fb-sect">我的回報</div>';
     if (!d.items.length) html += '<p class="center muted">還沒有回報紀錄。</p>';
-    html += d.items.map(function (x) {
-      var cls = x.status === '已處理' ? 'st2' : x.status === '處理中' ? 'st1' : x.status === '不處理' ? '' : 'st0';
+    var maxAsk = d.maxAsk || 2;
+    var shown = S.fbAll ? d.items : d.items.slice(0, FB_SHOW);
+    var hidden = d.items.slice(shown.length);
+    html += shown.map(function (x) {
+      // 修正 1：狀態三種；對話串；有回覆時「👍 了解／還有問題」（同一筆最多補充 maxAsk 次）
+      var cls = x.status === '已完成' ? 'st2' : x.status === '處理中' ? 'st1' : 'st0';
       var meta = fbTime(x.time) + '・' + x.type + (x.store ? '・' + x.store : '');
-      var reply = x.reply
-        ? '<div class="fb-reply"><div class="fb-who">回覆・' + esc(fbTime(x.replyTime)) +
-          (x.fresh ? '<span class="fb-new">有更新</span>' : '') + '</div>' + esc(x.reply) + '</div>'
-        : '<p class="small muted" style="margin:8px 0 0">還沒回覆' + (x.fresh ? '<span class="fb-new">有更新</span>' : '') + '</p>';
+      var thread = (x.thread || []).map(function (m) {
+        return '<div class="fb-th"><div class="fb-who">' + (m.me ? '我' : '回覆') + '・' + esc(fbTime(m.t)) + '</div>' + esc(m.x) + '</div>';
+      }).join('');
+      var lastMe = x.thread && x.thread.length && x.thread[x.thread.length - 1].me;
+      var reply, act = '';
+      if (x.reply) {
+        reply = '<div class="fb-reply"><div class="fb-who">回覆・' + esc(fbTime(x.replyTime)) +
+          (x.fresh ? '<span class="fb-new">有更新</span>' : '') + '</div>' + esc(x.reply) + '</div>';
+        var canAsk = (x.asks || 0) < maxAsk;
+        if (S.fbAsk && S.fbAsk.id === x.id && canAsk) {
+          act = '<textarea id="fbAskText" rows="3" maxlength="' + FB_MAX + '" style="margin-top:10px" placeholder="還有什麼想補充的？">' + esc(S.fbAsk.text) + '</textarea>' +
+            '<div class="fb-act"><button class="btn" data-act="fbAskCancel">取消</button><button class="btn primary" data-act="fbAskSend" data-id="' + esc(x.id) + '">送出</button></div>';
+        } else {
+          act = x.acked ? '<div class="fb-ok">✓ 你已確認</div>'
+            : '<div class="fb-act"><button class="btn" data-act="fbAck" data-id="' + esc(x.id) + '">👍 了解</button>' +
+              (canAsk ? '<button class="btn" data-act="fbAskOpen" data-id="' + esc(x.id) + '">還有問題</button>' : '') + '</div>';
+          if (!canAsk) act += '<p class="small muted" style="margin:8px 0 0">這筆已補充 ' + maxAsk + ' 次，還有其他問題請另送一筆意見回饋。</p>';
+        }
+      } else {
+        reply = '<p class="small muted" style="margin:8px 0 0">' + (lastMe ? '等待回覆中' : '還沒回覆') + (x.fresh ? '<span class="fb-new">有更新</span>' : '') + '</p>';
+      }
       return '<div class="card"><div class="row"><span class="small muted">' + esc(meta) + '</span>' +
         '<span class="tag ' + cls + '">' + esc(x.status) + '</span></div>' +
-        '<p class="fb-text">' + esc(x.text) + '</p>' + reply + '</div>';
+        '<p class="fb-text">' + esc(x.text) + '</p>' + thread + reply + act + '</div>';
     }).join('');
+    if (hidden.length) {
+      var hiddenNew = hidden.some(function (x) { return x.fresh; });
+      html += '<button class="btn block" data-act="fbMore" style="margin-bottom:12px">看更早的回報（' + hidden.length + ' 筆）' +
+        (hiddenNew ? '<span class="fb-new">有更新</span>' : '') + '</button>';
+    }
     html += '<button class="btn block" data-act="home" style="margin-top:4px">回首頁</button>';
     $view.innerHTML = html;
   }
@@ -914,6 +944,30 @@
       if (btn) { btn.disabled = false; btn.textContent = '送出'; }
       alertMsg(e.message || '送出失敗，請再試一次');
     });
+  }
+
+  /* 修正 1：👍 了解、還有問題 */
+  function fbAction(action, payload, okMsg) {
+    if (S.busy) return;
+    S.busy = true;
+    $view.querySelectorAll('.fb-act .btn').forEach(function (b) { b.disabled = true; });
+    api(action, payload).then(function (d) {
+      S.busy = false;
+      S.fb = d;
+      S.fbAsk = null;
+      if (S.view === 'feedback') { var y = window.scrollY; render(); window.scrollTo(0, y); }
+      if (okMsg) toast(okMsg);
+    }).catch(function (e) {
+      S.busy = false;
+      $view.querySelectorAll('.fb-act .btn').forEach(function (b) { b.disabled = false; });
+      alertMsg(e.message || '送出失敗，請再試一次');
+    });
+  }
+  function fbAskSend(id) {
+    var text = String((S.fbAsk && S.fbAsk.text) || '').trim();
+    if (!text) { toast('請填寫想補充的內容'); return; }
+    if (text.length > FB_MAX) { toast('最多 ' + FB_MAX + ' 字'); return; }
+    fbAction('feedbackAsk', { id: id, text: text }, '已送出補充');
   }
 
   function renderVote() {
@@ -1730,6 +1784,11 @@
       case 'castVote': return castVote(d.date, d.type, d.id);
       case 'fbType': { S.fbForm.type = d.type; return renderFeedback(); } // 第 49 步
       case 'fbSend': return sendFeedback();
+      case 'fbAck': return fbAction('feedbackAck', { id: d.id }, ''); // 第 49 步修正 1
+      case 'fbAskOpen': { S.fbAsk = { id: d.id, text: '' }; renderFeedback(); var t = document.getElementById('fbAskText'); if (t) t.focus(); return; }
+      case 'fbAskCancel': { S.fbAsk = null; return renderFeedback(); }
+      case 'fbMore': { S.fbAll = true; return renderFeedback(); }
+      case 'fbAskSend': return fbAskSend(d.id);
       case 'clearSearch': {
         var inp = document.getElementById('menuSearch');
         inp.value = ''; applySearch(''); return;
@@ -1766,6 +1825,7 @@
       var c = document.getElementById('fbCount');
       if (c) c.textContent = e.target.value.length + ' / ' + FB_MAX;
     }
+    if (e.target.id === 'fbAskText' && S.fbAsk) S.fbAsk.text = e.target.value; // 修正 1
   });
 
   $view.addEventListener('change', function (e) {
