@@ -9,6 +9,7 @@
  *   - 打開時先顯示上一次的首頁（存在這支手機裡，只限今天），最新資料回來再換掉。
  *   - 首頁出現後，在背景一家一家先把今天的菜單載好，點進去就不用再等。
  *   - 送單、取消、申請遇到「系統忙碌」會自動等 1.5 秒再送一次。
+ *     （第 60 步：改成約 2 分鐘內持續排隊重送，畫面顯示「排隊中，請稍候」）
  * 第 18 步（使用體驗）：
  *   - 購物車暫存在這支手機（只限今天、同一團），關掉再開會自動帶回；送出或取消後清掉。
  *   - 截止前 15 分鐘出現紅色倒數；購物車還沒送出或還沒點餐也會提醒。
@@ -233,7 +234,34 @@
     return '';
   }
 
-  function api(action, data) {
+  // 第 60 步：遇到 BUSY 不再只重送 1 次，改成約 2 分鐘內持續排隊重送。
+  // 後端是先排隊（tryLock）等不到才回 BUSY，還沒寫入任何資料，所以重送不會變成兩張單。
+  // onQueue：第一次遇到 BUSY 時呼叫，畫面改顯示「排隊中，請稍候」。
+  var BUSY_LAST_TRY_MS = 100000; // 開始送出後 100 秒內才再送（每次後端最多排 25 秒，最後一次約 2 分鐘內結束）
+  var BUSY_MAX_TRIES = 8;
+  var BUSY_GIVE_UP_MSG = '現在點餐的人很多，已經排隊約 2 分鐘還沒輪到，請再按一次。';
+  function api(action, data, onQueue) {
+    if (!RETRY_ON_BUSY[action]) return apiAuth(action, data);
+    var start = Date.now();
+    var tries = 0;
+    function attempt() {
+      tries++;
+      return apiAuth(action, data).catch(function (e) {
+        if (!(e && e.code === 'BUSY')) throw e;
+        if (Date.now() - start > BUSY_LAST_TRY_MS || tries >= BUSY_MAX_TRIES) {
+          e.message = BUSY_GIVE_UP_MSG;
+          throw e;
+        }
+        if (tries === 1 && onQueue) { try { onQueue(); } catch (x) {} }
+        var wait = 1500 + Math.floor(Math.random() * 2000); // 錯開一點，免得大家同一刻一起重送
+        return new Promise(function (r) { setTimeout(r, wait); }).then(attempt);
+      });
+    }
+    return attempt();
+  }
+
+  // 第 60 步：原本 api() 的登入憑證處理搬到這裡（重送時也照同樣規則帶憑證）
+  function apiAuth(action, data) {
     var p;
     if (sessOk()) {
       // 第 47 步第二階段：先用登入憑證；過期了再走原本的 LINE 驗證
@@ -253,12 +281,7 @@
     } else {
       p = liffReady.then(function () { return apiOnce(action, data); });
     }
-    return p.catch(function (e) {
-      if (e && e.code === 'BUSY' && RETRY_ON_BUSY[action]) {
-        return new Promise(function (r) { setTimeout(r, 1500); }).then(function () { return apiOnce(action, data); });
-      }
-      throw e;
-    });
+    return p;
   }
 
   // 第 20 步：幫別人點的時候，每個請求都帶上對方的 LineID（後端會再確認自己是行政）
@@ -1514,7 +1537,10 @@
     var lines = S.cart.map(function (l) { return { itemId: l.itemId, optionIds: l.optionIds, qty: l.qty, note: l.note }; });
     var sent = S.cart.map(function (l) { return Object.assign({}, l); });
     var shown = cartTotal(); // 第 53 步紅隊 3：送出前畫面上的金額
-    api('submit', { sessionId: S.menu.session.id, lines: lines }).then(function (r) {
+    api('submit', { sessionId: S.menu.session.id, lines: lines }, function () { // 第 60 步
+      btn.textContent = '排隊中，請稍候…';
+      toast('現在點餐的人比較多，正在排隊，請不要關掉畫面');
+    }).then(function (r) {
       S.busy = false;
       // 第 18 步：清掉暫存的購物車、記下「上次點的」，顯示已送出畫面
       clearCartDraft(S.menu.session.id);
@@ -1548,7 +1574,7 @@
     var payLine = paidAmt > 0 ? '\n\n' + (S.forId ? '這張單' : '你') + '已付款 $' + paidAmt + '：截止前重新點會自動抵用；不點了請找行政退錢。' : '';
     if (!window.confirm((S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。') + payLine)) return; // 第 25 步
     setLoading('取消中…');
-    api('cancel', { sessionId: sessionId }).then(function () {
+    api('cancel', { sessionId: sessionId }, function () { setLoading('排隊中，請稍候…'); }).then(function () { // 第 60 步
       clearCartDraft(sessionId); // 第 18 步
       forgetMenu(sessionId); // 第 47 步
       toast('訂單已取消');
@@ -2142,7 +2168,8 @@
         var name = document.getElementById('realName').value.trim();
         if (!name) return toast('請填寫姓名');
         setLoading('送出中…');
-        return api('apply', { realName: name }).then(function (r) { S.home = r; go('home'); toast('已送出'); }).catch(showError);
+        // 第 60 步：排隊時顯示「排隊中，請稍候」
+        return api('apply', { realName: name }, function () { setLoading('排隊中，請稍候…'); }).then(function (r) { S.home = r; go('home'); toast('已送出'); }).catch(showError);
       }
       case 'menu': return openMenu(d.id);
       case 'cancel': return cancelOrder(d.id);
