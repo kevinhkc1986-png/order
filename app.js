@@ -65,6 +65,17 @@
  * 第 49 步：頁首「我的訂單」左邊多一個「意見回饋」（後台開放、或測試人員才看得到；幫別人點餐時不顯示）。
  *   意見回饋頁：上面送出表單（意見回饋／菜單錯誤＋店家、內容 300 字），下面是自己的回報、處理狀況和回覆。
  *   有更新還沒看時按鈕出現紅點，打開意見回饋頁就消失。畫面上不出現「行政」兩個字。
+ *
+ * 第 50 步（幫猶豫的同事快速點餐）：購物車是空的時候，菜單上面多一行「🤔 不知道吃什麼？點我看推薦」（每次進菜單都先收起）。
+ *   - 展開後：「大家最常點」前 3 名（後端 hot，這家店有效訂單 5 張以上才有），按「加入」帶大家最常選的選項直接進購物車；
+ *     選項對不上就用預設選項，還缺必選的就打開品項視窗。
+ *   - 「幫我選」（不設預算）：餐點店可選想吃的類別（飯、麵、水餃・鍋貼、湯、小菜・單點，先看品名再看菜單分類，PICK_FOOD_KINDS）；
+ *     飲料店改成選想喝的種類（咖啡、奶茶・鮮奶、水果茶・果汁、純茶、冬瓜・仙草・其他，看品名關鍵字 PICK_KINDS 判斷）
+ *     和甜度、冰量（抽到哪杯都照這個，那杯沒有這個選項就用大家最常選的）。設定記在這支手機（yk_pick_v1）。
+ *   - 熱門的品項抽中機率高一點。第一次抽＋重抽 3 次，再按就跳「🙅 夠了喔！再抽也不會更好吃，就這個吧 😆」，
+ *     按鈕變「次數用完了」；仍可加入購物車或自己點。次數記在這支手機，同一團當天算一輪（yk_pickn_v1），關掉重開不重算。
+ *   - 紅隊審查（11-14）：收起時露出第 1 名「大家最常點：○○ ›」；幫我選只顯示這家店有的類別；
+ *     「加入」後提示寫出帶了哪些選項。
  */
 (function () {
   'use strict';
@@ -1158,6 +1169,7 @@
     S.cartStart = JSON.stringify(S.cart);
     S.search = '';
     S.lateFail = false; // 第 40 步
+    S.pickOpen = false; // 第 50 步：每次進菜單都先收起
     restoreCartDraft(); // 第 18 步
     go('menu');
   }
@@ -1209,7 +1221,8 @@
     if (m.session.late) head += '<div class="notice">這一團已經截止，你是行政，可以幫忙補單或改單。</div>';
     // 第 49 步修正 2：看得到意見回饋的人，菜單頁多一個「回報這家菜單」（自動帶店名、類型菜單錯誤）
     if (S.home && S.home.fb && !S.forId) head += '<p class="fb-menu-link"><button class="link-btn" data-act="fbMenu">回報這家菜單有錯</button></p>';
-    if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示）
+    if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示；第 50 步：移到最上面，常客最快）
+    if (m.session.open && !S.cart.length) head += pickCardHtml(); // 第 50 步：不知道吃什麼？（預設收起）
 
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
       return '<button class="chip' + (i === 0 ? ' on' : '') + '" data-act="cat" data-i="' + i + '">' + esc(c) + '</button>';
@@ -1301,6 +1314,7 @@
     }
     draft = { itemId: itemId, optionIds: ids, qty: base ? base.qty : 1, note: base ? base.note : '', index: index, tried: false };
     draft.start = draftSig(); // 第 40 步：記下打開時的樣子，關掉時比對有沒有改
+    S.sheetMode = 'item'; // 第 50 步：同一個視窗也拿來放「幫我選」
     renderSheet();
     $sheet.hidden = false;
     syncBack(); // 第 38 步
@@ -1380,7 +1394,7 @@
     return JSON.stringify([draft.optionIds.slice().sort(), draft.qty, String(note || '').trim()]);
   }
   function askCloseSheet() {
-    if ($sheet.hidden || !draft) return closeSheet();
+    if ($sheet.hidden || !draft || S.sheetMode === 'pick') return closeSheet(); // 第 50 步：幫我選直接關
     if (draftSig() !== draft.start && !window.confirm('還沒加入購物車，要放棄嗎？')) return;
     closeSheet();
   }
@@ -1678,7 +1692,11 @@
     var when = md.length === 3 ? (+md[1]) + '/' + (+md[2]) : esc(r.date);
     return '<div class="card reorder"><div class="row"><b>上次在這家點的</b><span class="small muted">' + when + '</span></div>' +
       '<p class="small" style="margin:6px 0 0">' + r.lines.map(function (l) {
-        return esc(l.name) + ' × ' + l.qty + (l.note ? '（' + esc(l.note) + '）' : '');
+        // 第 50 步：補上選項（飲料只列名稱，跟「大家最常點」一樣）；選項已對不上的照舊只寫品名
+        var ll = { itemId: l.itemId, optionIds: l.optionIds || [] };
+        var ot = lineValid(ll) ? (isDrink() ? shortOpt(ll) : optText(ll)) : '';
+        var extra = [ot, l.note].filter(Boolean).join('；');
+        return esc(l.name) + ' × ' + l.qty + (extra ? '（' + esc(extra) + '）' : '');
       }).join('、') + '</p>' +
       '<div class="btn-row"><button class="btn" data-act="reorder">一鍵加入購物車</button></div></div>';
   }
@@ -1696,6 +1714,282 @@
     toast('已加入 ' + ok + ' 項' + (bad ? '，有 ' + bad + ' 項菜單已變動沒有加入' : '') + '，價格以今天菜單為準');
     render();
   }
+
+  /* ---------- 第 50 步：不知道吃什麼？（大家最常點、幫我選） ---------- */
+
+  var PICK_KEY = 'yk_pick_v1';    // 幫我選的設定，存在這支手機：{ 餐點: { kinds }, 飲料: { kinds, sweet, ice } }
+  var PICK_N_KEY = 'yk_pickn_v1'; // 每一團抽了幾次：{ sessionId: { day, n, itemId, optionIds, enough } }
+  var PICK_MAX = 4;               // 第一次抽＋重抽 3 次；再按就跳「夠了喔」
+  // 餐點類別：先看品名，看不出來再看這家店的菜單分類；都對不到就是「小菜・單點」（使用者 11-14：改成想吃的類別）
+  var PICK_FOOD_KINDS = [
+    ['飯', /飯|丼|便當|粥|燴/],
+    ['麵', /麵|冬粉|米粉|粿仔|河粉|烏龍|粄條|板條|米苔目/],
+    ['水餃・鍋貼', /餃|鍋貼|餛飩|抄手/],
+    ['湯', /湯|羹/]
+  ];
+  var PICK_FOOD_OTHER = '小菜・單點';
+  function foodKind(item) {
+    var order = [PICK_FOOD_KINDS[1], PICK_FOOD_KINDS[2], PICK_FOOD_KINDS[0], PICK_FOOD_KINDS[3]]; // 麵、餃先看（例如「餛飩麵」算麵、「炒飯」算飯）
+    var i;
+    for (i = 0; i < order.length; i++) if (order[i][1].test(item.name)) return order[i][0];
+    for (i = 0; i < order.length; i++) if (order[i][1].test(item.cat || '')) return order[i][0];
+    return PICK_FOOD_OTHER;
+  }
+  // 飲料種類：菜單沒有統一欄位，用品名關鍵字判斷，由上往下第一個對到的就是（歸錯在這裡改關鍵字）
+  var PICK_KINDS = [
+    ['咖啡', /咖啡|美式|濃縮|cafe|coffee/i],
+    ['奶茶・鮮奶', /奶|拿鐵|歐蕾|乳|牛|芝士|芝芝|布蕾|可可|優格|優酪|阿華田|巧克力/],
+    ['水果茶・果汁', /果|檸|橙|柳丁|葡萄|莓|芒|百香|鳳梨|旺來|蘋果|西瓜|梅|多多|養樂多|桑椹|柚|桔|橘|蔗|椰|蔓越|荔枝|奇異|蜜桃|青提|酪梨|洛神|山楂|仙楂/],
+    ['純茶', /茶|青|紅|綠|烏龍|鐵觀音|普洱|四季春|萱|翡翠|觀音|碧螺|包種|東方美人|錫蘭|伯爵|玉露|梨山|阿里山|拉拉山|原葉|茉莉|紅玉|冬片/]
+  ];
+  var PICK_KIND_OTHER = '冬瓜・仙草・其他';
+  function drinkKind(item) {
+    for (var i = 0; i < PICK_KINDS.length; i++) if (PICK_KINDS[i][1].test(item.name)) return PICK_KINDS[i][0];
+    return PICK_KIND_OTHER;
+  }
+  var PICK_SWEET = ['無糖', '一分', '三分', '五分'];
+  var PICK_ICE = ['去冰', '微冰', '少冰', '正常冰', '熱飲'];
+  var PICK_ENOUGH = '🙅 夠了喔！再抽也不會更好吃，就這個吧 😆';
+
+  function isDrink() { return S.menu && S.menu.session.type === '飲料'; }
+
+  // 後端算好的人氣（只留目前菜單上還有的品項）
+  function hotList() {
+    var h = S.menu && S.menu.hot;
+    return h && h.list ? h.list.filter(function (x) { return itemOf(x.itemId); }) : [];
+  }
+  function hotTop() { return S.menu.hot && S.menu.hot.ok ? hotList().slice(0, 3) : []; }
+  function hotOf(id) { return hotList().filter(function (x) { return x.itemId === id; })[0]; }
+
+  function defaultIds(item) {
+    var ids = [];
+    groupsOf(item).forEach(function (g) {
+      g.options.filter(function (o) { return o.def; }).slice(0, g.max).forEach(function (o) { ids.push(o.id); });
+    });
+    return ids;
+  }
+
+  // 一份「快速加入」的品項：大家最常選的選項；對不上就用預設選項
+  function quickLine(itemId) {
+    var item = itemOf(itemId);
+    if (!item) return null;
+    var h = hotOf(itemId);
+    var line = { itemId: itemId, optionIds: h && h.optionIds ? h.optionIds.slice() : [], qty: 1, note: '', stale: false };
+    if (!(h && h.optionIds && lineValid(line))) line.optionIds = defaultIds(item);
+    return line;
+  }
+
+  // 飲料：套用同仁自己設的甜度、冰量（那杯沒有這個選項就不動）
+  function applyDrinkPref(line) {
+    if (!isDrink()) return line;
+    var p = pickPrefs();
+    var item = itemOf(line.itemId);
+    groupsOf(item).forEach(function (g) {
+      var want = /甜度/.test(g.name) ? p.sweet : (/冰|溫度/.test(g.name) ? p.ice : '');
+      if (!want || !g.single) return;
+      var o = g.options.filter(function (x) { return x.name === want; })[0];
+      if (!o) return;
+      line.optionIds = line.optionIds.filter(function (id) { return !g.options.some(function (x) { return x.id === id; }); });
+      line.optionIds.push(o.id);
+    });
+    return line;
+  }
+
+  // 加進購物車；選項還缺（例如必選又沒有預設）就打開品項視窗讓同仁選
+  function addQuick(line) {
+    if (!line) return toast('這個品項已下架');
+    var item = itemOf(line.itemId);
+    if (!lineValid(line)) { toast('請選一下「' + item.name + '」的選項'); return openItem(line.itemId, null); }
+    S.cart.push(line);
+    var ot = isDrink() ? shortOpt(line) : optText(line); // 紅隊 3：說清楚加了什麼選項
+    toast('已加入 ' + item.name + (ot ? '（' + ot + '）' : '') + '，要改到購物車按修改');
+    render();
+  }
+
+  // 飲料卡片上只列選項名稱（例如「無糖・微冰・L」），不列群組名，比較短
+  function shortOpt(l) {
+    var item = itemOf(l.itemId);
+    if (!item) return '';
+    var names = [];
+    groupsOf(item).forEach(function (g) {
+      g.options.forEach(function (o) { if (l.optionIds.indexOf(o.id) >= 0) names.push(o.name); });
+    });
+    return names.join('・');
+  }
+
+  function pickCardHtml() {
+    var word = isDrink() ? '喝' : '吃';
+    if (!S.pickOpen) {
+      var first = hotTop()[0]; // 紅隊 2：收起時直接露出第 1 名
+      var more = first ? '大家最常點：' + esc(itemOf(first.itemId).name) + ' ›' : '點我看推薦 ›';
+      return '<button class="card pick-fold" data-act="pickOpen"><span class="pick-q">🤔 不知道' + word + '什麼？</span><span class="pick-more">' + more + '</span></button>';
+    }
+    var top = hotTop();
+    var rows = top.map(function (h, i) {
+      var l = quickLine(h.itemId);
+      var item = itemOf(h.itemId);
+      var ot = isDrink() ? shortOpt(l) : optText(l); // 飲料選項多，只列名稱
+      var sub = h.people + ' 人點過' + (ot ? '・' + ot : '');
+      return '<div class="pick-row"><span class="rk">' + (i + 1) + '</span><div class="tx"><div class="nm">' + esc(item.name) + '</div>' +
+        '<div class="sb">' + esc(sub) + '</div></div><b>$' + linePrice(l) + '</b>' +
+        '<button class="btn" data-act="hotAdd" data-id="' + esc(h.itemId) + '">加入</button></div>';
+    }).join('');
+    return '<div class="card pick"><div class="row"><h3>🤔 不知道' + word + '什麼？</h3>' +
+      '<button class="link-btn" data-act="pickClose">收起</button></div>' +
+      (rows ? '<div class="pick-sec"><b>大家最常點</b>' + rows + '</div>' : '') +
+      '<button class="btn dice" data-act="pick">🎲 幫我選（' + (isDrink() ? '選種類、甜度冰量' : '選想吃的類別') + '）</button></div>';
+  }
+
+  /* ----- 幫我選視窗 ----- */
+
+  function pickPrefs() {
+    var all = readStore(PICK_KEY);
+    var p = all[isDrink() ? '飲料' : '餐點'] || {};
+    return { kinds: Array.isArray(p.kinds) ? p.kinds : [],
+      sweet: p.sweet || '', ice: p.ice || '' };
+  }
+  function savePickPrefs(p) {
+    var all = readStore(PICK_KEY);
+    all[isDrink() ? '飲料' : '餐點'] = p;
+    writeStore(PICK_KEY, all);
+  }
+
+  // 這一團今天抽了幾次（關掉再開不重算；隔天、別團重新算）
+  function pickRec() {
+    var all = readStore(PICK_N_KEY);
+    var r = all[S.menu.session.id];
+    return r && r.day === localToday() ? r : { day: localToday(), n: 0 };
+  }
+  function savePickRec(r) {
+    var all = readStore(PICK_N_KEY);
+    Object.keys(all).forEach(function (k) { if (!all[k] || all[k].day !== localToday()) delete all[k]; }); // 舊的清掉
+    all[S.menu.session.id] = r;
+    writeStore(PICK_N_KEY, all);
+  }
+
+  function pickLine(itemId) { return applyDrinkPref(quickLine(itemId)); }
+
+  // 紅隊 1：這家店實際有的類別（沒有的類別不顯示按鈕；之前存的類別這家沒有就不算）
+  function kindOf(i) { return isDrink() ? drinkKind(i) : foodKind(i); }
+  function kindsHere() {
+    var all = isDrink() ? PICK_KINDS.map(function (k) { return k[0]; }).concat([PICK_KIND_OTHER])
+      : PICK_FOOD_KINDS.map(function (k) { return k[0]; }).concat([PICK_FOOD_OTHER]);
+    var have = {};
+    S.menu.items.forEach(function (i) { have[kindOf(i)] = 1; });
+    return all.filter(function (k) { return have[k]; });
+  }
+  function kindsOn(p) {
+    var here = kindsHere();
+    return p.kinds.filter(function (k) { return here.indexOf(k) >= 0; });
+  }
+
+  function pickCandidates() {
+    var p = pickPrefs();
+    var on = kindsOn(p);
+    return S.menu.items.filter(function (i) {
+      // 只抽選了的類別；沒選就是都可以（使用者 11-14：不設預算）
+      return !on.length || on.indexOf(kindOf(i)) >= 0;
+    });
+  }
+
+  function openPick() {
+    S.sheetMode = 'pick';
+    renderPick();
+    $sheet.hidden = false;
+    syncBack();
+  }
+
+  function renderPick() {
+    var p = pickPrefs();
+    var r = pickRec();
+    var drink = isDrink();
+    var word = drink ? '喝' : '吃';
+    var cands = pickCandidates();
+    var chip = function (attr, on, label) {
+      return '<button class="opt' + (on ? ' on' : '') + '" ' + attr + ' aria-pressed="' + on + '">' + esc(label) + '</button>';
+    };
+
+    var html = '<div class="row"><h2>🎲 幫我選</h2><button class="btn pick-x" data-pact="close">關閉</button></div>';
+    if (drink) {
+      html += '<div class="group"><div class="group-head"><b>想喝的種類</b><span class="tag">可多選，沒選就是都可以</span></div><div class="opts">' +
+        kindsHere().map(function (k) {
+          return chip('data-pact="kind" data-v="' + esc(k) + '"', p.kinds.indexOf(k) >= 0, k);
+        }).join('') + '</div><p class="small muted" style="margin:6px 0 0">種類是看品名判斷的，少數飲料可能歸錯。</p></div>';
+      html += '<div class="group"><div class="group-head"><b>甜度</b><span class="tag">抽到哪杯都照這個</span></div><div class="opts">' +
+        chip('data-pact="sweet" data-v=""', !p.sweet, '不指定') +
+        PICK_SWEET.map(function (s) { return chip('data-pact="sweet" data-v="' + esc(s) + '"', p.sweet === s, s); }).join('') + '</div></div>' +
+        '<div class="group"><div class="group-head"><b>冰量</b></div><div class="opts">' +
+        chip('data-pact="ice" data-v=""', !p.ice, '不指定') +
+        PICK_ICE.map(function (s) { return chip('data-pact="ice" data-v="' + esc(s) + '"', p.ice === s, s); }).join('') + '</div></div>';
+    }
+    if (!drink) html += '<div class="group"><div class="group-head"><b>想吃的類別</b><span class="tag">可多選，沒選就是都可以</span></div><div class="opts">' +
+      kindsHere().map(function (k) {
+        return chip('data-pact="kind" data-v="' + esc(k) + '"', p.kinds.indexOf(k) >= 0, k);
+      }).join('') + '</div><p class="small muted" style="margin:6px 0 0">類別是看品名判斷的，少數品項可能歸錯。設定會記在這支手機。</p></div>';
+
+    var res = r.itemId ? itemOf(r.itemId) : null;
+    if (res) {
+      var line = { itemId: r.itemId, optionIds: (r.optionIds || []).slice(), qty: 1, note: '', stale: false };
+      if (!lineValid(line)) line = pickLine(r.itemId);
+      html += '<div class="result"><div class="small muted">今天就' + word + '這個吧</div>' +
+        '<div class="row"><span class="nm">' + esc(res.name) + '</span><b class="pr">$' + linePrice(line) + '</b></div>' +
+        (optText(line) ? '<div class="small muted">' + esc(optText(line)) + '</div>' : '') +
+        '<div class="small muted">符合條件的有 ' + cands.length + ' 樣</div></div>';
+    }
+    if (!cands.length) {
+      html += '<div class="notice" style="margin:16px 0 0">沒有符合的品項，' + (drink ? '多選幾個種類試試。' : '多選幾個類別試試。') + '</div>';
+    }
+    if (r.enough) html += '<div class="notice pick-enough">' + esc(PICK_ENOUGH) + '</div>';
+
+    var left = PICK_MAX - r.n;
+    var drawBtn;
+    if (!res) drawBtn = '<button class="btn primary" data-pact="draw"' + (cands.length ? '' : ' disabled') + '>🎲 抽一個</button>';
+    else if (r.enough) drawBtn = '<button class="btn" disabled>🔄 次數用完了</button>';
+    else drawBtn = '<button class="btn" data-pact="draw"' + (cands.length ? '' : ' disabled') + '>🔄 再抽' + (left > 0 ? '（剩 ' + left + ' 次）' : '一次') + '</button>';
+    html += '<div class="sheet-foot btn-row pick-foot">' + drawBtn +
+      (res ? '<button class="btn primary" data-pact="take">加入購物車</button>' : '') + '</div>';
+    $sheetBody.innerHTML = html;
+  }
+
+  function drawPick() {
+    var r = pickRec();
+    if (r.n >= PICK_MAX) { r.enough = true; savePickRec(r); return renderPick(); }
+    var cands = pickCandidates();
+    if (!cands.length) return renderPick();
+    var pool = cands.length > 1 ? cands.filter(function (i) { return i.id !== r.itemId; }) : cands; // 盡量不要抽到一樣的
+    var weight = function (i) { var h = hotOf(i.id); return 1 + (h ? h.people : 0); }; // 熱門的機率高一點
+    var sum = pool.reduce(function (s, i) { return s + weight(i); }, 0);
+    var x = Math.random() * sum, got = pool[pool.length - 1];
+    for (var k = 0; k < pool.length; k++) { x -= weight(pool[k]); if (x < 0) { got = pool[k]; break; } }
+    var line = pickLine(got.id);
+    r.n += 1; r.itemId = got.id; r.optionIds = line.optionIds;
+    savePickRec(r);
+    renderPick();
+  }
+
+  $sheetBody.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-pact]');
+    if (!b || b.disabled) return;
+    var a = b.dataset.pact, v = b.dataset.v;
+    var p = pickPrefs();
+    if (a === 'close') return closeSheet();
+    if (a === 'draw') return drawPick();
+    if (a === 'take') {
+      var r = pickRec();
+      var line = { itemId: r.itemId, optionIds: (r.optionIds || []).slice(), qty: 1, note: '', stale: false };
+      if (!lineValid(line)) line = pickLine(r.itemId);
+      closeSheet();
+      return addQuick(line);
+    }
+    if (a === 'sweet') p.sweet = v;
+    if (a === 'ice') p.ice = v;
+    if (a === 'kind') {
+      var ki = p.kinds.indexOf(v);
+      if (ki >= 0) p.kinds.splice(ki, 1); else p.kinds.push(v);
+    }
+    savePickPrefs(p);
+    renderPick();
+  });
 
   /* ---------- 第 18 步：菜單搜尋、分類自動標示 ---------- */
 
@@ -1825,6 +2119,10 @@
       case 'back': return go('menu');
       case 'home': return go('home');
       case 'reorder': return addLastOrder();
+      case 'pickOpen': { S.pickOpen = true; return render(); } // 第 50 步
+      case 'pickClose': { S.pickOpen = false; return render(); }
+      case 'hotAdd': return addQuick(quickLine(d.id));
+      case 'pick': return openPick();
       case 'guide': return openGuide(); // 第 25 步
       case 'vote': return openVote(); // 第 46 步
       case 'castVote': return castVote(d.date, d.type, d.id);

@@ -303,3 +303,27 @@ body.proxying .cd-banner { top: 100px; }
 /* 第 49 步修正 2：菜單頁「回報這家菜單有錯」 */
 .fb-menu-link { margin: 6px 0 0; text-align: right; }
 .fb-menu-link .link-btn { font-size: 14px; color: var(--muted); text-decoration: underline; }
+
+/* ---------- 第 50 步：不知道吃什麼？（大家最常點、幫我選） ---------- */
+.card.pick-fold { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 12px 14px; border-color: #f2c94c; background: #fffdf3; font-weight: 700; text-align: left; }
+.pick-fold .pick-more { font-size: 14px; font-weight: 600; color: #8a6a00; white-space: nowrap; }
+.card.pick { border-color: #f2c94c; background: #fffdf3; padding: 14px; }
+.pick h3 { font-size: 17px; margin: 0; }
+.pick-sec { margin-top: 10px; }
+.pick-sec > b { font-size: 14px; color: var(--muted); display: block; margin-bottom: 6px; }
+.pick-row { display: flex; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.pick-row .rk { flex: none; width: 22px; height: 22px; border-radius: 50%; background: #f2c94c; color: #6b4e00; font-size: 13px; font-weight: 700; text-align: center; line-height: 22px; }
+.pick-row .tx { flex: 1; min-width: 0; }
+.pick-row .tx .nm { font-weight: 600; }
+.pick-row .tx .sb { font-size: 13px; color: var(--muted); }
+.pick-row .btn { min-height: 36px; padding: 0 12px; }
+.btn.dice { width: 100%; margin-top: 10px; background: #fff4d6; border-color: #f2c94c; color: #6b4e00; }
+.btn.pick-x { min-height: 36px; padding: 0 14px; }
+.result { border: 2px solid var(--brand); border-radius: 12px; padding: 12px 14px; margin-top: 16px; background: var(--brand-soft); }
+.result .nm { font-size: 20px; font-weight: 700; }
+.result .pr { font-size: 20px; }
+.notice.pick-enough { margin: 12px 0 0; font-weight: 600; }
+.pick-foot .btn { white-space: nowrap; padding: 0 10px; }
+.pick-fold .pick-q { white-space: nowrap; }
+.pick-fold .pick-more { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
