@@ -269,3 +269,4 @@ body.proxying .cd-banner { top: 100px; }
 .vote-opt.me .vote-name { color: var(--brand); font-weight: 700; }
 .vote-name { flex: 1; }
 .vote-n { color: var(--muted); font-size: 14px; }
+.vote-home { margin-top: 12px; }

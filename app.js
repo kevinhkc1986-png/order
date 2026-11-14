@@ -44,7 +44,7 @@
  *   - 還沒付的單標籤改成灰色「待付款」；改單前已付過的單顯示「已付 $X，差 $Y」或「已付 $X，要退 $Y」（第 39 步 credit）。
  * 第 42 步（紅隊 10）：等待核准頁開著時每 30 秒自動檢查一次（頁面在背景時暫停、回到前景馬上查），
  *   核准後自動切到首頁（接著照舊跳出 3 頁使用說明）。文字改成「等待核准後就可以點餐。」。
- * 第 46 步（投票）：
+ * 第 46 步（投票）：按下就先畫綠框、背景送出（改票只送最後一次）；投票頁最下面有「回首頁」。
  *   - 首頁最下面多一張「候選店」卡片（後端有給 vote 才顯示：Settings「投票開放」或測試人員），
  *     列出下一個有投票的日子的候選店、自己選了哪家，按「看看大家想吃什麼 ›」進投票頁。不催投票。
  *   - 投票頁：點一家就算選，截止前點別家就是改票；選過的那一類才看得到票數，不顯示誰投哪家。
@@ -547,6 +547,7 @@
     api('voteInfo').then(function (d) {
       if (S.view !== 'loading') return; // 讀取中按了返回
       S.voteInfo = d;
+      S.voteOk = null;
       go('vote');
     }).catch(showError);
   }
@@ -563,39 +564,76 @@
         '<p class="small muted">' + esc(d.cutoffLabel) + ' 截止</p>' +
         d.types.map(function (t) {
           var voted = !!t.myVote;
-          var total = voted ? t.candidates.reduce(function (n, c) { return n + (c.count || 0); }, 0) : 0;
+          var wait = voted && t.countsPending; // 第一次投、票數還在路上：先畫綠框，票數顯示「…」
+          var total = voted && !wait ? t.candidates.reduce(function (n, c) { return n + (c.count || 0); }, 0) : 0;
           return '<div class="card"><div class="vote-head"><span class="tag type">' + esc(t.type) + '</span>' +
             '<span class="small muted">' + (voted ? '可改票' : '投完看票數') + '</span></div>' +
             t.candidates.map(function (c) {
               var me = c.id === t.myVote;
               var pct = voted && total ? Math.round((c.count || 0) * 100 / total) : 0;
               return '<button class="vote-opt' + (me ? ' me' : '') + '" data-act="castVote" data-date="' + esc(d.date) +
-                '" data-type="' + esc(t.type) + '" data-id="' + esc(c.id) + '"' + (S.voteBusy ? ' disabled' : '') + '>' +
-                (voted ? '<span class="vote-fill" style="width:' + pct + '%"></span>' : '') +
+                '" data-type="' + esc(t.type) + '" data-id="' + esc(c.id) + '">' +
+                (voted && !wait ? '<span class="vote-fill" style="width:' + pct + '%"></span>' : '') +
                 '<span class="vote-dot"></span><span class="vote-name">' + esc(c.name) + '</span>' +
-                (voted ? '<span class="vote-n">' + (c.count || 0) + ' 票</span>' : '') + '</button>';
+                (voted ? '<span class="vote-n">' + (wait ? '…' : (c.count || 0) + ' 票') + '</span>' : '') + '</button>';
             }).join('') + '</div>';
         }).join('');
-    }).join('') + '<p class="small muted center-text">最後由行政決定</p>';
+    }).join('') + '<p class="small muted center-text">票最多的排進那天，臨時有狀況會再調整</p>' +
+      '<button class="btn block vote-home" data-act="home">回首頁</button>';
+  }
+
+  /*
+   * 投票：按下就先畫綠框（改票時票數也先自己加減），背景再送出；伺服器回來再換成真正的票數。
+   * 同一類送出中又換別家：只記住最後一次，等前一筆回來再送最後那家。
+   * 送不成功：換回最後一次確定成功的狀態，跳一行錯誤。
+   */
+  var voteSending = {}; // key 日期|類型 → true（送出中）
+  var voteWant = {};    // key → 送出中又按的那一家
+
+  function voteType(date, type) {
+    var day = ((S.voteInfo && S.voteInfo.days) || []).filter(function (d) { return d.date === date; })[0];
+    return day && day.types.filter(function (x) { return x.type === type; })[0];
   }
 
   function castVote(date, type, storeId) {
-    var day = (S.voteInfo.days || []).filter(function (d) { return d.date === date; })[0];
-    var t = day && day.types.filter(function (x) { return x.type === type; })[0];
-    if (!t || t.myVote === storeId || S.voteBusy) return;
-    S.voteBusy = true;
+    var t = voteType(date, type);
+    if (!t || t.myVote === storeId) return;
+    if (!S.voteOk) S.voteOk = JSON.parse(JSON.stringify(S.voteInfo)); // 最後一次確定的狀態（失敗時換回）
+    var known = t.myVote && !t.countsPending; // 已經看得到票數：改票時直接加減
+    t.candidates.forEach(function (c) {
+      if (!known) return;
+      if (c.id === t.myVote) c.count = Math.max((c.count || 0) - 1, 0);
+      if (c.id === storeId) c.count = (c.count || 0) + 1;
+    });
+    if (!known) t.countsPending = true;
+    t.myVote = storeId;
+    syncVoteCard(S.voteInfo);
     renderVote();
+    var key = date + '|' + type;
+    if (voteSending[key]) { voteWant[key] = storeId; return; }
+    sendVote(date, type, storeId);
+  }
+
+  function sendVote(date, type, storeId) {
+    var key = date + '|' + type;
+    voteSending[key] = true;
     api('vote', { date: date, type: type, storeId: storeId }).then(function (d) {
-      S.voteBusy = false;
+      voteSending[key] = false;
+      var next = voteWant[key];
+      delete voteWant[key];
+      if (next && next !== storeId) return sendVote(date, type, next); // 送出中又換了，送最後那家
+      if (Object.keys(voteSending).some(function (k) { return voteSending[k]; })) return; // 另一類還在送，等它回來再一起換
       S.voteInfo = d;
+      S.voteOk = null;
       syncVoteCard(d);
       if (S.view === 'vote') renderVote();
-      toast('已選好，截止前都可以改');
     }).catch(function (e) {
-      S.voteBusy = false;
-      if (e && e.code === 'CLOSED') { toast(e.message); return openVote(); }
+      voteSending[key] = false;
+      delete voteWant[key];
+      if (e && e.code === 'CLOSED') { S.voteOk = null; toast(e.message); return openVote(); }
+      if (S.voteOk) { S.voteInfo = S.voteOk; S.voteOk = null; syncVoteCard(S.voteInfo); }
       if (S.view === 'vote') renderVote();
-      showError(e);
+      toast('沒有投成功：' + ((e && e.message) || '網路不穩') + '，請再按一次');
     });
   }
 
