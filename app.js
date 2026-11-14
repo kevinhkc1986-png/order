@@ -61,6 +61,10 @@
  * 第 47 步第二階段：LINE 驗證一次之後，後端回一張登入憑證（6 小時），存在這支手機（yk_sess_v1）。
  *   之後每次都先帶這張憑證，不用再等 LINE 元件、也不用後端再問 LINE。過期或被清掉就自動改回 LINE 驗證。
  *   LINE 元件載好後比對帳號，換了 LINE 帳號就丟掉舊憑證、重新載入首頁。
+ *
+ * 第 49 步：頁首「我的訂單」左邊多一個「意見回饋」（後台開放、或測試人員才看得到；幫別人點餐時不顯示）。
+ *   意見回饋頁：上面送出表單（意見回饋／菜單錯誤＋店家、內容 300 字），下面是自己的回報、處理狀況和回覆。
+ *   有更新還沒看時按鈕出現紅點，打開意見回饋頁就消失。畫面上不出現「行政」兩個字。
  */
 (function () {
   'use strict';
@@ -74,6 +78,12 @@
   var $title = document.getElementById('title');
   var $back = document.getElementById('backBtn');
   var $historyBtn = document.getElementById('historyBtn');
+  // 第 49 步：「意見回饋」按鈕放在「我的訂單」左邊（index.html 不用改，這裡自己加）
+  var $fbBtn = document.createElement('button');
+  $fbBtn.className = 'link-btn fb-btn';
+  $fbBtn.hidden = true;
+  $fbBtn.innerHTML = '意見回饋<span class="fb-dot" hidden></span>';
+  $historyBtn.parentNode.insertBefore($fbBtn, $historyBtn);
   var $sheet = document.getElementById('sheet');
   var $sheetBody = document.getElementById('sheetBody');
   var $toast = document.getElementById('toast');
@@ -482,7 +492,7 @@
   /* ---------- 第 47 步：速度記錄（連點頁首標題 5 下打開） ---------- */
 
   var SPEED_KEY = 'yk_speed_v1';
-  var ACT_NAMES = { init: '首頁', menu: '菜單', submit: '送單', cancel: '取消', history: '我的訂單', apply: '申請', voteInfo: '投票頁', vote: '投票' };
+  var ACT_NAMES = { init: '首頁', menu: '菜單', submit: '送單', cancel: '取消', history: '我的訂單', apply: '申請', voteInfo: '投票頁', vote: '投票', feedbackList: '意見回饋', feedbackSend: '送出意見' };
 
   function nowMs() { return window.performance && performance.now ? performance.now() : Date.now(); }
 
@@ -543,13 +553,16 @@
   function render() {
     var approved = S.home && S.home.user.status === '核准';
     $historyBtn.hidden = !(approved && S.view === 'home');
+    var fbOn = !!(approved && S.view === 'home' && !S.forId && S.home.fb); // 第 49 步
+    $fbBtn.hidden = !fbOn;
+    $fbBtn.querySelector('.fb-dot').hidden = !(fbOn && S.home.fb.unread > 0);
     $back.hidden = S.view === 'home';
     $bottom.hidden = true;
     S.err = false; // 第 38 步
     renderProxyBanner(); // 第 20 步
     if (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm') saveCartDraft(); // 第 18 步
     if (S.view === 'confirm') S.view = 'cart'; // 第 31 步：確認頁已拿掉，併進購物車
-    ({ home: renderHome, menu: renderMenu, cart: renderCart, history: renderHistory, done: renderDone, vote: renderVote })[S.view](); // 第 46 步：vote
+    ({ home: renderHome, menu: renderMenu, cart: renderCart, history: renderHistory, done: renderDone, vote: renderVote, feedback: renderFeedback })[S.view](); // 第 46 步：vote；第 49 步：feedback
     refreshCountdown();
     syncBack(); // 第 38 步
   }
@@ -602,6 +615,7 @@
     go('home');
   });
   $historyBtn.addEventListener('click', openHistory);
+  $fbBtn.addEventListener('click', openFeedback); // 第 49 步
 
   /* ---------- 第 42 步：等待核准時自動檢查 ---------- */
 
@@ -808,6 +822,98 @@
       writeDay(VOTE_KEY, { d: d }); // 第 47 步
       go('vote');
     }).catch(showError);
+  }
+
+  /* ---------- 第 49 步：意見回饋 ---------- */
+
+  var FB_MAX = 300;
+  S.fbForm = { type: '意見回饋', storeId: '', text: '' };
+  S.fb = null; // feedbackList 回傳：items、stores
+
+  function openFeedback() {
+    if (S.forId) return;
+    if (S.fb) go('feedback'); else { setLoading('讀取中…'); S.view = 'feedback'; }
+    api('feedbackList').then(function (d) {
+      S.fb = d;
+      if (S.home && S.home.fb) S.home.fb.unread = 0; // 看過了，紅點消失
+      if (S.view !== 'feedback') return;
+      var y = window.scrollY; render(); window.scrollTo(0, y);
+    }).catch(function (e) {
+      if (S.view === 'feedback') showError(e);
+    });
+  }
+
+  function fbTime(t) {
+    t = String(t || '');
+    if (t.length < 16) return t;
+    return Number(t.slice(5, 7)) + '/' + Number(t.slice(8, 10)) + ' ' + t.slice(11, 16);
+  }
+
+  function renderFeedback() {
+    $title.textContent = '意見回饋';
+    var d = S.fb;
+    if (!d) { $view.innerHTML = '<div class="center muted">讀取中…</div>'; return; }
+    FB_MAX = d.max || FB_MAX;
+    var f = S.fbForm;
+    if (f.type === '菜單錯誤' && !f.storeId && d.stores.length) f.storeId = d.stores[0].id;
+    var types = ['意見回饋', '菜單錯誤'].map(function (t) {
+      return '<button class="chip' + (f.type === t ? ' on' : '') + '" data-act="fbType" data-type="' + t + '">' + t + '</button>';
+    }).join('');
+    var stores = '';
+    if (f.type === '菜單錯誤') {
+      stores = '<label class="field" for="fbStore">哪一家店</label><select id="fbStore" class="fb-select">' +
+        d.stores.map(function (s) {
+          return '<option value="' + esc(s.id) + '"' + (s.id === f.storeId ? ' selected' : '') + '>' +
+            esc(s.name) + (s.today ? '（今天）' : '') + '</option>';
+        }).join('') + '</select>';
+    }
+    var html = '<div class="card"><h2>我要回報</h2>' +
+      '<label class="field">類型</label><div class="fb-seg">' + types + '</div>' + stores +
+      '<label class="field" for="fbText">內容</label>' +
+      '<textarea id="fbText" rows="4" maxlength="' + FB_MAX + '" placeholder="' +
+      (f.type === '菜單錯誤' ? '例：排骨飯價錢不對、少了某個選項' : '想說的話都可以寫在這裡') + '">' + esc(f.text) + '</textarea>' +
+      '<div class="fb-count" id="fbCount">' + f.text.length + ' / ' + FB_MAX + '</div>' +
+      '<div class="btn-row"><button class="btn primary" data-act="fbSend">送出</button></div>' +
+      '<p class="small muted" style="margin:8px 0 0">送出後不能修改，回覆會顯示在下面。</p></div>';
+
+    html += '<div class="fb-sect">我的回報</div>';
+    if (!d.items.length) html += '<p class="center muted">還沒有回報紀錄。</p>';
+    html += d.items.map(function (x) {
+      var cls = x.status === '已處理' ? 'st2' : x.status === '處理中' ? 'st1' : x.status === '不處理' ? '' : 'st0';
+      var meta = fbTime(x.time) + '・' + x.type + (x.store ? '・' + x.store : '');
+      var reply = x.reply
+        ? '<div class="fb-reply"><div class="fb-who">回覆・' + esc(fbTime(x.replyTime)) +
+          (x.fresh ? '<span class="fb-new">有更新</span>' : '') + '</div>' + esc(x.reply) + '</div>'
+        : '<p class="small muted" style="margin:8px 0 0">還沒回覆' + (x.fresh ? '<span class="fb-new">有更新</span>' : '') + '</p>';
+      return '<div class="card"><div class="row"><span class="small muted">' + esc(meta) + '</span>' +
+        '<span class="tag ' + cls + '">' + esc(x.status) + '</span></div>' +
+        '<p class="fb-text">' + esc(x.text) + '</p>' + reply + '</div>';
+    }).join('');
+    html += '<button class="btn block" data-act="home" style="margin-top:4px">回首頁</button>';
+    $view.innerHTML = html;
+  }
+
+  function sendFeedback() {
+    if (S.busy) return;
+    var f = S.fbForm;
+    var text = String(f.text || '').trim();
+    if (!text) { toast('請填寫內容'); return; }
+    if (text.length > FB_MAX) { toast('內容最多 ' + FB_MAX + ' 字'); return; }
+    if (f.type === '菜單錯誤' && !f.storeId) { toast('請選擇哪一家店'); return; }
+    S.busy = true;
+    var btn = $view.querySelector('[data-act="fbSend"]');
+    if (btn) { btn.disabled = true; btn.textContent = '送出中…'; }
+    api('feedbackSend', { type: f.type, storeId: f.type === '菜單錯誤' ? f.storeId : '', text: text }).then(function (d) {
+      S.busy = false;
+      S.fb = d;
+      S.fbForm = { type: f.type, storeId: f.storeId, text: '' };
+      if (S.view === 'feedback') { render(); }
+      toast('已送出，謝謝你的回報');
+    }).catch(function (e) {
+      S.busy = false;
+      if (btn) { btn.disabled = false; btn.textContent = '送出'; }
+      alertMsg(e.message || '送出失敗，請再試一次');
+    });
   }
 
   function renderVote() {
@@ -1622,6 +1728,8 @@
       case 'guide': return openGuide(); // 第 25 步
       case 'vote': return openVote(); // 第 46 步
       case 'castVote': return castVote(d.date, d.type, d.id);
+      case 'fbType': { S.fbForm.type = d.type; return renderFeedback(); } // 第 49 步
+      case 'fbSend': return sendFeedback();
       case 'clearSearch': {
         var inp = document.getElementById('menuSearch');
         inp.value = ''; applySearch(''); return;
@@ -1651,7 +1759,17 @@
       '<select id="forWho">' + opts + '</select></div>';
   }
 
+  // 第 49 步：意見回饋表單（打字、選店家只記下來，不重畫）
+  $view.addEventListener('input', function (e) {
+    if (e.target.id === 'fbText') {
+      S.fbForm.text = e.target.value;
+      var c = document.getElementById('fbCount');
+      if (c) c.textContent = e.target.value.length + ' / ' + FB_MAX;
+    }
+  });
+
   $view.addEventListener('change', function (e) {
+    if (e.target.id === 'fbStore') { S.fbForm.storeId = e.target.value; return; } // 第 49 步
     if (e.target.id !== 'forWho') return;
     var sel = e.target;
     setProxy(sel.value, sel.value ? sel.options[sel.selectedIndex].text.replace(/（臨時）$/, '') : '');

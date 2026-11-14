@@ -276,3 +276,20 @@ body.proxying .cd-banner { top: 100px; }
 .speed-list { overflow-y: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
 .speed-row { padding: 6px 0; border-bottom: 1px solid #eee; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; }
 .speed-row > div { flex-basis: 100%; }
+
+/* ---------- 第 49 步：意見回饋 ---------- */
+.topbar .link-btn { white-space: nowrap; }
+.fb-btn { position: relative; }
+.fb-dot { position: absolute; top: 3px; right: 0; width: 9px; height: 9px; border-radius: 50%; background: var(--danger); }
+.fb-seg { display: flex; gap: 8px; }
+.fb-seg .chip { flex: 1; text-align: center; }
+.fb-select { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); }
+.fb-count { text-align: right; font-size: 13px; color: var(--muted); margin-top: 4px; }
+.fb-sect { margin: 20px 0 8px; font-size: 15px; color: var(--muted); }
+.fb-text { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }
+.fb-reply { margin-top: 10px; padding: 10px 12px; background: var(--brand-soft); border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
+.fb-who { font-size: 13px; color: var(--muted); white-space: normal; }
+.fb-new { display: inline-block; font-size: 12px; background: var(--danger); color: #fff; border-radius: 999px; padding: 0 7px; margin-left: 6px; }
+.tag.st0 { background: #fdecea; color: var(--danger); }
+.tag.st1 { background: var(--warn-soft); color: var(--warn); }
+.tag.st2 { background: var(--brand-soft); color: var(--brand); }
