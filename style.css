@@ -284,6 +284,7 @@ body.proxying .cd-banner { top: 100px; }
 .fb-seg { display: flex; gap: 8px; }
 .fb-seg .chip { flex: 1; text-align: center; }
 .fb-select { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); }
+.fb-fixed { background: #f5f6f7; font-weight: 600; } /* 第 49 步修正 4：從菜單頁來，店家固定 */
 .fb-count { text-align: right; font-size: 13px; color: var(--muted); margin-top: 4px; }
 .fb-sect { margin: 20px 0 8px; font-size: 15px; color: var(--muted); }
 .fb-text { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }

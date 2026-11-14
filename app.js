@@ -617,7 +617,7 @@
     go('home');
   });
   $historyBtn.addEventListener('click', openHistory);
-  $fbBtn.addEventListener('click', function () { S.fbFrom = 'home'; openFeedback(); }); // 第 49 步（修正 2：記得從哪裡來）
+  $fbBtn.addEventListener('click', function () { S.fbFrom = 'home'; if (S.fbForm && S.fbForm.locked) S.fbForm = { type: '意見回饋', storeId: '', text: '' }; openFeedback(); }); // 修正 4：從首頁來不鎖店家 // 第 49 步（修正 2：記得從哪裡來）
 
   /* ---------- 第 42 步：等待核准時自動檢查 ---------- */
 
@@ -865,13 +865,17 @@
     if (f.type === '菜單錯誤' && !f.storeId && f.storeName) { // 修正 2：從菜單頁來，用店名找
       var hit = d.stores.filter(function (s) { return s.name === f.storeName; })[0];
       if (hit) f.storeId = hit.id;
+      else f.locked = false; // 修正 4：找不到這家（例如已下架）就改回下拉選單
     }
     if (f.type === '菜單錯誤' && !f.storeId && d.stores.length) f.storeId = d.stores[0].id;
     var types = ['意見回饋', '菜單錯誤'].map(function (t) {
       return '<button class="chip' + (f.type === t ? ' on' : '') + '" data-act="fbType" data-type="' + t + '">' + t + '</button>';
     }).join('');
     var stores = '';
-    if (f.type === '菜單錯誤') {
+    var lockHit = f.locked && f.storeId && d.stores.filter(function (s) { return s.id === f.storeId; })[0];
+    if (f.type === '菜單錯誤' && lockHit) { // 修正 4：從菜單頁來，只顯示這家店，不能換
+      stores = '<label class="field">哪一家店</label><div class="fb-select fb-fixed">' + esc(lockHit.name) + '</div>';
+    } else if (f.type === '菜單錯誤') {
       stores = '<label class="field" for="fbStore">哪一家店</label><select id="fbStore" class="fb-select">' +
         d.stores.map(function (s) {
           return '<option value="' + esc(s.id) + '"' + (s.id === f.storeId ? ' selected' : '') + '>' +
@@ -945,7 +949,7 @@
     api('feedbackSend', { type: f.type, storeId: f.type === '菜單錯誤' ? f.storeId : '', text: text }).then(function (d) {
       S.busy = false;
       S.fb = d;
-      S.fbForm = { type: f.type, storeId: f.storeId, text: '' };
+      S.fbForm = { type: f.type, storeId: f.storeId, storeName: f.storeName, text: '', locked: f.locked }; // 修正 4：送完還是同一家
       if (S.view === 'feedback') { render(); }
       toast('已送出，謝謝你的回報');
     }).catch(function (e) {
@@ -1831,7 +1835,7 @@
       case 'fbAskCancel': { S.fbAsk = null; return renderFeedback(); }
       case 'fbMore': { S.fbAll = true; return renderFeedback(); }
       case 'fbMenu': { // 修正 2：從菜單頁回報這家
-        S.fbForm = { type: '菜單錯誤', storeId: '', storeName: S.menu ? S.menu.store.name : '', text: '' };
+        S.fbForm = { type: '菜單錯誤', storeId: '', storeName: S.menu ? S.menu.store.name : '', text: '', locked: true }; // 修正 4：店家固定
         S.fbFrom = 'menu';
         return openFeedback();
       }
