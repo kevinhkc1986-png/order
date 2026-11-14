@@ -76,9 +76,16 @@
  *     按鈕變「次數用完了」；仍可加入購物車或自己點。次數記在這支手機，同一團當天算一輪（yk_pickn_v1），關掉重開不重算。
  *   - 紅隊審查（11-14）：收起時露出第 1 名「大家最常點：○○ ›」；幫我選只顯示這家店有的類別；
  *     「加入」後提示寫出帶了哪些選項。
+ *
+ * 第 58 步（紅隊 6、7、11）：
+ *   - 取消已付款（或改單前付過）的單時，確認框多一句「已付款 $N：截止前重新點會自動抵用；不點了請找行政退錢」。
+ *   - 首頁：這團取消了自己的已付款單、還沒重新點時，卡片多一行「取消的單已付 $N…」（後端 spare）。
+ *   - 截止倒數改用伺服器時間（後端每個回應帶 st），手機時鐘不準也不會提早或延後。
  */
 (function () {
   'use strict';
+
+  var clockSkew = 0, clockRtt = Infinity; // 第 58 步：伺服器時間 − 手機時間（毫秒）、量到它的那次來回時間
 
   var CFG = window.APP_CONFIG || {};
   var MAX_QTY = 20; // 每行最多幾份（和 Api.gs 的 MAX_QTY 相同）
@@ -275,6 +282,7 @@
     var body = { action: action, idToken: idToken, data: withFor(action, data) };
     if (useSess && sess) body.sess = sess.s;
     var t0 = nowMs();
+    var sentAt = Date.now(); // 第 58 步：校正時鐘用
     return fetch(CFG.API_URL, {
       method: 'POST',
       // 用 text/plain 送出，瀏覽器不會先發 CORS 預檢（Apps Script 不處理預檢）
@@ -289,6 +297,7 @@
       return r.json().catch(function () { throw new Error('伺服器回應讀取失敗，請稍後再試一次。'); }); // 第 37 步
     }).then(function (res) {
       logSpeed(action, nowMs() - t0, res.t, !!tok || !!body.sess); // 第 47 步
+      noteServerTime(res.st, sentAt, Date.now()); // 第 58 步
       if (res.sess) saveSess(res.sess); // 第 47 步第二階段
       if (res.ok) return res.data;
       if (res.code === 'TOKEN' && !tok && !body.sess && liffIsReady && window.liff) {
@@ -754,6 +763,7 @@
         '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + notice +
         (o ? '<p class="small">' + esc(who) + '已點餐：<b>$' + o.total + '</b>　' + payTag(o) + '</p>' // 第 40 步
            : '<p class="small muted">' + esc(who) + (s.open ? '還沒點餐' : '這團沒有點餐') + '</p>') +
+        (!o && s.spare > 0 ? '<p class="small spare-note">取消的單已付 $' + esc(s.spare) + '，' + (s.open ? '截止前重新點會自動抵用；不點了' : '') + '請找行政退錢</p>' : '') + // 第 58 步
         (draftN ? '<div class="cart-pending">⚠ 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '<b>還沒送出</b>，按「' + (o ? '修改訂單' : '繼續點餐') + '」→「送出訂單」才算點好</div>' : '') + // 第 31 步：紅框
         editHint(s, o) + // 第 25 步
         '<div class="btn-row">' + btns + '</div></div>';
@@ -1531,7 +1541,12 @@
   }
 
   function cancelOrder(sessionId) {
-    if (!window.confirm(S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。')) return; // 第 25 步
+    // 第 58 步（紅隊 7）：已付款（或改單前付過）的單，確認框提醒找行政退錢
+    var ses = ((S.home && S.home.sessions) || []).filter(function (x) { return x.id === sessionId; })[0];
+    var mo = ses && ses.myOrder;
+    var paidAmt = mo ? (mo.paid ? Number(mo.total) || 0 : Number(mo.credit) || 0) : 0;
+    var payLine = paidAmt > 0 ? '\n\n' + (S.forId ? '這張單' : '你') + '已付款 $' + paidAmt + '：截止前重新點會自動抵用；不點了請找行政退錢。' : '';
+    if (!window.confirm((S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。') + payLine)) return; // 第 25 步
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }).then(function () {
       clearCartDraft(sessionId); // 第 18 步
@@ -2057,8 +2072,20 @@
   // 截止時間是台灣時間（Asia/Taipei），用 +08:00 算，手機時區設錯也不影響
   function minutesLeft(date, cutoff) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !/^\d{2}:\d{2}$/.test(cutoff || '')) return null;
-    return (new Date(date + 'T' + cutoff + ':00+08:00').getTime() - Date.now()) / 60000;
+    return (new Date(date + 'T' + cutoff + ':00+08:00').getTime() - serverNow()) / 60000; // 第 58 步：用伺服器時間
   }
+
+  /* 第 58 步（紅隊 11）：手機時鐘不準時，倒數用伺服器時間校正。
+     後端每個回應帶 st（伺服器毫秒），取來回最快的那一次估「伺服器 − 手機」的差（誤差約半個來回時間）。 */
+  function noteServerTime(st, sentAt, gotAt) {
+    st = Number(st);
+    var rtt = gotAt - sentAt;
+    if (!st || !(rtt >= 0) || rtt > 15000 || rtt >= clockRtt) return;
+    var skew = st - (sentAt + gotAt) / 2;
+    if (Math.abs(skew) > 86400000) return; // 差超過一天不合理，不用
+    clockSkew = skew; clockRtt = rtt;
+  }
+  function serverNow() { return Date.now() + clockSkew; }
 
   function leftText(m) { return m < 1 ? '不到 1 分鐘' : Math.ceil(m) + ' 分鐘'; }
 
