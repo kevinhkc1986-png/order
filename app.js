@@ -840,6 +840,7 @@
     S.fbAll = false; // 每次進來都先只看最新 3 筆
     if (S.fb) go('feedback'); else { setLoading('讀取中…'); S.view = 'feedback'; }
     api('feedbackList').then(function (d) {
+      if (S.fbPending) return; // 修正 3：背景還在存「了解／補充」，先不蓋掉畫面
       S.fb = d;
       if (S.home && S.home.fb) S.home.fb.unread = 0; // 看過了，紅點消失
       if (S.view !== 'feedback') return;
@@ -954,21 +955,52 @@
     });
   }
 
-  /* 修正 1：👍 了解、還有問題 */
+  /* 修正 1：👍 了解、還有問題
+     修正 3：不用等——畫面先變，存檔在背景；失敗就把那一筆改回去，補充的字放回輸入框 */
+  S.fbPending = 0;
+  function fbNowStr() {
+    var d = new Date(), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+  function fbFind(id) {
+    var items = (S.fb && S.fb.items) || [];
+    for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
+    return -1;
+  }
+  function fbRerender() {
+    if (S.view === 'feedback') { var y = window.scrollY; render(); window.scrollTo(0, y); }
+  }
   function fbAction(action, payload, okMsg) {
-    if (S.busy) return;
-    S.busy = true;
-    $view.querySelectorAll('.fb-act .btn').forEach(function (b) { b.disabled = true; });
+    var i = fbFind(payload.id);
+    if (i < 0) return;
+    var x = S.fb.items[i];
+    if (x._saving) return; // 同一筆正在存，避免連按
+    var before = JSON.parse(JSON.stringify(x));
+    var after = JSON.parse(JSON.stringify(x));
+    if (action === 'feedbackAck') {
+      after.acked = true; after.status = '已完成'; after.fresh = false;
+    } else { // feedbackAsk：原回覆和補充接進對話，回覆清空，狀態回到處理中（跟後台規則一樣）
+      after.thread = (after.thread || []).concat([{ me: false, t: x.replyTime || '', x: x.reply }, { me: true, t: fbNowStr(), x: payload.text }]);
+      after.reply = ''; after.replyTime = ''; after.status = '處理中'; after.acked = false; after.fresh = false;
+      after.asks = (after.asks || 0) + 1;
+    }
+    after._saving = true;
+    S.fb.items[i] = after;
+    S.fbAsk = null;
+    S.fbPending++;
+    fbRerender();
+    if (okMsg) toast(okMsg);
     api(action, payload).then(function (d) {
-      S.busy = false;
-      S.fb = d;
-      S.fbAsk = null;
-      if (S.view === 'feedback') { var y = window.scrollY; render(); window.scrollTo(0, y); }
-      if (okMsg) toast(okMsg);
+      S.fbPending--;
+      if (!S.fbPending) { S.fb = d; fbRerender(); } // 都存完了，用後台資料再對一次
+      else { var j = fbFind(payload.id); if (j >= 0) delete S.fb.items[j]._saving; }
     }).catch(function (e) {
-      S.busy = false;
-      $view.querySelectorAll('.fb-act .btn').forEach(function (b) { b.disabled = false; });
-      alertMsg(e.message || '送出失敗，請再試一次');
+      S.fbPending--;
+      var j = fbFind(payload.id);
+      if (j >= 0) S.fb.items[j] = before; // 改回按之前
+      if (action === 'feedbackAsk') S.fbAsk = { id: payload.id, text: payload.text }; // 字放回去，不用重打
+      fbRerender();
+      alertMsg('沒有存到，請再按一次。' + (e && e.message ? '（' + e.message + '）' : ''));
     });
   }
   function fbAskSend(id) {
