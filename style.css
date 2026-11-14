@@ -270,3 +270,9 @@ body.proxying .cd-banner { top: 100px; }
 .vote-name { flex: 1; }
 .vote-n { color: var(--muted); font-size: 14px; }
 .vote-home { margin-top: 12px; }
+
+/* ---------- 第 47 步：速度記錄（連點頁首標題 5 下） ---------- */
+.guide.speed { max-height: 80vh; display: flex; flex-direction: column; }
+.speed-list { overflow-y: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+.speed-row { padding: 6px 0; border-bottom: 1px solid #eee; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; }
+.speed-row > div { flex-basis: 100%; }

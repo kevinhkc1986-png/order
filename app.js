@@ -49,6 +49,14 @@
  *     列出下一個有投票的日子的候選店、自己選了哪家，按「看看大家想吃什麼 ›」進投票頁。不催投票。
  *   - 投票頁：點一家就算選，截止前點別家就是改票；選過的那一類才看得到票數，不顯示誰投哪家。
  *   - 網址帶 ?view=vote（LINE「投票」回覆的連結）直接開投票頁。行政代點時不顯示投票。
+ * 第 47 步（加速：先顯示、背景更新）：
+ *   - LINE 登入元件改成不擋畫面：先畫出上次的首頁，元件在背景載入。
+ *   - 手機裡還有沒過期的 LINE 登入憑證時，不等 LINE 登入完成就先向後端要資料（憑證過期就等登入完成再要一次）。
+ *   - 「更新中…」超過 2 秒才出現；資料沒變就不重畫。
+ *   - 菜單、投票頁、我的訂單：看過（或背景預載過）的先直接顯示，最新資料回來再悄悄換上
+ *     （購物車改過、正在打字搜尋、開著品項視窗時不重畫，只換資料）。首頁載完會在背景預載投票頁。
+ *   - 送單、取消照舊等後端回應（不能讓同仁以為送出了其實沒有）。
+ *   - 速度記錄：連點頁首標題 5 下，顯示最近 30 次各操作花的時間（存在這支手機，不上傳）。
  */
 (function () {
   'use strict';
@@ -152,8 +160,36 @@
   // 第 16 步：送單這類要排隊的操作，遇到 BUSY（系統忙碌）自動再送一次
   var RETRY_ON_BUSY = { submit: true, cancel: true, apply: true };
 
+  // 第 47 步：LINE 登入完成前，先用手機裡還沒過期的憑證（LINE 元件自己存的）向後端要資料
+  var liffIsReady = false;
+  var earlyTok = storedIdToken();
+
+  function storedIdToken() {
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i) || '';
+        if (k.indexOf('LIFF_STORE:') !== 0 || !/:IDToken$/.test(k) || (CFG.LIFF_ID && k.indexOf(CFG.LIFF_ID) < 0)) continue;
+        var t = localStorage.getItem(k) || '';
+        var b = (t.split('.')[1] || '').replace(/-/g, '+').replace(/_/g, '/');
+        while (b.length % 4) b += '=';
+        var exp = Number(JSON.parse(atob(b)).exp) || 0;
+        if (exp * 1000 > Date.now() + 120000) return t; // 還有 2 分鐘以上才過期
+      }
+    } catch (x) {}
+    return '';
+  }
+
   function api(action, data) {
-    return liffReady.then(function () { return apiOnce(action, data); }).catch(function (e) {
+    var p;
+    if (!liffIsReady && earlyTok) {
+      p = apiOnce(action, data, earlyTok).catch(function (e) {
+        if (e && e.code === 'TOKEN') { earlyTok = ''; return liffReady.then(function () { return apiOnce(action, data); }); }
+        throw e;
+      });
+    } else {
+      p = liffReady.then(function () { return apiOnce(action, data); });
+    }
+    return p.catch(function (e) {
       if (e && e.code === 'BUSY' && RETRY_ON_BUSY[action]) {
         return new Promise(function (r) { setTimeout(r, 1500); }).then(function () { return apiOnce(action, data); });
       }
@@ -175,8 +211,10 @@
 
   var NET_MSG = '網路連線不穩，請確認網路後再按一次。'; // 第 37 步
 
-  function apiOnce(action, data) {
-    var idToken = window.liff ? liff.getIDToken() : '';
+  // tok：第 47 步，LINE 登入完成前用的憑證（有帶就不會因為過期而重新登入，由 api() 等登入完成再試）
+  function apiOnce(action, data, tok) {
+    var idToken = tok || (liffIsReady && window.liff ? liff.getIDToken() : '');
+    var t0 = nowMs();
     return fetch(CFG.API_URL, {
       method: 'POST',
       // 用 text/plain 送出，瀏覽器不會先發 CORS 預檢（Apps Script 不處理預檢）
@@ -190,8 +228,9 @@
       if (!r.ok) throw new Error('連線失敗（' + r.status + '），請稍後再試一次。');
       return r.json().catch(function () { throw new Error('伺服器回應讀取失敗，請稍後再試一次。'); }); // 第 37 步
     }).then(function (res) {
+      logSpeed(action, nowMs() - t0, res.t, !!tok); // 第 47 步
       if (res.ok) return res.data;
-      if (res.code === 'TOKEN' && window.liff) {
+      if (res.code === 'TOKEN' && !tok && liffIsReady && window.liff) {
         liff.logout();
         liff.login({ redirectUri: location.href });
       }
@@ -218,37 +257,87 @@
     return /(^|[?&])view=vote(&|$)/.test(q);
   })();
 
+  // 第 47 步：LINE 登入元件改成 async 載入（不擋畫面），這裡等它載好
+  function whenLiff() {
+    return new Promise(function (resolve, reject) {
+      if (window.liff) return resolve();
+      var el = document.getElementById('liffSdk');
+      var fail = function () { reject(new Error('LINE 登入元件載入失敗，請關閉後重新開啟。')); };
+      if (!el) return fail();
+      el.addEventListener('load', function () { if (window.liff) resolve(); else fail(); });
+      el.addEventListener('error', fail);
+    });
+  }
+
   function start() {
     if (!CFG.LIFF_ID || !CFG.API_URL) return showFatal('點餐頁還沒設定完成（config.js 的 LIFF_ID 或 API_URL 是空的），請通知行政。');
-    if (!window.liff) return showFatal('LINE 登入元件載入失敗，請關閉後重新開啟。');
     var cached = !wantHistory && !wantVote && readHomeCache();
-    if (cached) { S.home = cached; S.homeStale = true; go('home'); }
-    liff.init({ liffId: CFG.LIFF_ID }).then(function () {
+    if (cached) { S.home = cached; markStale(); go('home'); }
+    // 第 47 步：手機裡有沒過期的憑證，就不等 LINE 登入，先要首頁資料
+    var first = earlyTok ? loadHome(!!cached) : null;
+    whenLiff().then(function () {
+      return liff.init({ liffId: CFG.LIFF_ID });
+    }).then(function () {
       if (!liff.isLoggedIn()) {
         liff.login({ redirectUri: location.href });
         return new Promise(function () {}); // 等待跳轉
       }
+      liffIsReady = true;
       liffReadyResolve();
-      return loadHome(!!cached);
+      if (!first) return loadHome(!!cached);
     }).catch(function (e) { showFatal(e.message); });
   }
+
+  // 第 47 步：「更新中…」超過 2 秒才出現
+  var staleTimer = null;
+  function markStale() {
+    S.homeStale = true;
+    S.staleShow = false;
+    clearTimeout(staleTimer);
+    staleTimer = setTimeout(function () {
+      S.staleShow = true;
+      var el = document.getElementById('staleTag');
+      if (el) el.hidden = false;
+    }, 2000);
+  }
+  function clearStale() {
+    S.homeStale = false;
+    S.staleShow = false;
+    clearTimeout(staleTimer);
+    var el = document.getElementById('staleTag');
+    if (el) el.parentNode.removeChild(el);
+  }
+
+  // 第 47 步：比較首頁資料有沒有變（now 是現在幾點幾分，每分鐘都不同，不算）
+  function homeSig(d) {
+    if (!d) return '';
+    var c = {};
+    Object.keys(d).forEach(function (k) { if (k !== 'now') c[k] = d[k]; });
+    return JSON.stringify(c);
+  }
+
+  var firstHomeLogged = false;
 
   // quiet = true：畫面上已經有上次的首頁，不要換成「載入中…」
   function loadHome(quiet) {
     if (!quiet) setLoading('載入中…');
+    else if (!S.homeStale) markStale();
     S.prefetch = {}; // 首頁重新讀了，背景預載的菜單也要重新載
     return api('init').then(function (d) {
-      S.homeStale = false;
+      var same = quiet && S.view === 'home' && !S.forId === !d.forUser && homeSig(d) === homeSig(S.home);
+      clearStale();
       if (!S.forId) saveHomeCache(d); // 第 20 步：幫別人點的首頁不存
       if (S.forId && !d.forUser) { S.forId = ''; S.forName = ''; } // 對方已不在名單
       var keepView = quiet && S.view !== 'home'; // 等待時已經點進菜單了，就不要跳回首頁
       S.home = d;
-      if (!keepView) { S.menu = null; S.cart = []; go('home'); }
+      if (!firstHomeLogged) { firstHomeLogged = true; logSpeed('打開到首頁', nowMs(), null, false); }
+      if (same) { S.home = d; } // 第 47 步：資料沒變，不重畫（不會閃一下、不會跳回最上面）
+      else if (!keepView) { S.menu = null; S.cart = []; go('home'); }
       // 第 4 步：圖文選單「我的訂單」用 ?view=history 開啟時，直接進我的訂單（只在第一次載入時）
       if (wantHistory && d.user.status === '核准') { wantHistory = false; openHistory(); return; }
       if (wantVote && d.user.status === '核准') { wantVote = false; if (d.vote) { openVote(); return; } } // 第 46 步
       prefetchMenus();
-    }).catch(function (e) { S.homeStale = false; showError(e); });
+    }).catch(function (e) { clearStale(); showError(e); });
   }
 
   /* ---------- 第 16 步：上次的首頁、背景預載菜單 ---------- */
@@ -277,18 +366,127 @@
   }
 
   // 一家一家載（不同時送出），避免大家同時打開時一次佔用太多 Apps Script 執行數
+  // 第 47 步：載好的菜單記下來（點進去直接顯示）；菜單載完再預載投票頁
   function prefetchMenus() {
     var list = ((S.home && S.home.sessions) || []).filter(function (s) { return !s.canceled; });
     var token = S.prefetch;
+    var forId = S.forId;
     list.reduce(function (chain, s) {
       return chain.then(function () {
         if (S.prefetch !== token || token[s.id]) return;
         var p = api('menu', { sessionId: s.id });
         token[s.id] = p;
-        return p.catch(function () { if (S.prefetch === token) delete token[s.id]; });
+        return p.then(function (d) { if (S.forId === forId) keepMenu(d); })
+          .catch(function () { if (S.prefetch === token) delete token[s.id]; });
       });
-    }, Promise.resolve());
+    }, Promise.resolve()).then(function () {
+      if (S.prefetch === token) prefetchVote();
+    });
   }
+
+  /* ---------- 第 47 步：看過的菜單、投票、我的訂單先顯示 ---------- */
+
+  var MENU_KEY = 'yk_menu_v1';   // { date, m: { SessionID: 菜單 } }（只存自己的、只限今天）
+  var VOTE_KEY = 'yk_vote_v1';   // { date, d: 投票頁資料 }
+  var HIST_KEY = 'yk_hist_v1';   // { date, d: 我的訂單 }
+  S.menus = {};                  // 這次打開載過的菜單（幫別人點時是那個人的）
+
+  function readDay(key) {
+    try {
+      var o = JSON.parse(localStorage.getItem(key) || 'null');
+      if (o && o.date === localToday()) return o;
+    } catch (x) {}
+    return null;
+  }
+  function writeDay(key, o) {
+    try { o.date = localToday(); localStorage.setItem(key, JSON.stringify(o)); } catch (x) {}
+  }
+
+  function keepMenu(d) {
+    if (!d || !d.session) return;
+    S.menus[d.session.id] = d;
+    if (S.forId) return;
+    var o = readDay(MENU_KEY) || { m: {} };
+    o.m = o.m || {};
+    o.m[d.session.id] = d;
+    writeDay(MENU_KEY, o);
+  }
+  function knownMenu(sessionId) {
+    if (S.menus[sessionId]) return S.menus[sessionId];
+    if (S.forId) return null;
+    var o = readDay(MENU_KEY);
+    return (o && o.m && o.m[sessionId]) || null;
+  }
+  function forgetMenu(sessionId) {
+    delete S.menus[sessionId];
+    if (S.prefetch) delete S.prefetch[sessionId];
+    var o = readDay(MENU_KEY);
+    if (o && o.m && o.m[sessionId]) { delete o.m[sessionId]; writeDay(MENU_KEY, o); }
+  }
+
+  function prefetchVote() {
+    if (S.forId || !S.home || !S.home.vote || S.view === 'vote') return;
+    api('voteInfo').then(function (d) {
+      if (S.forId || voteBusy()) return;
+      S.voteInfo = d;
+      writeDay(VOTE_KEY, { d: d });
+    }).catch(function () {});
+  }
+  function voteBusy() {
+    return !!S.voteOk || Object.keys(voteSending).some(function (k) { return voteSending[k]; });
+  }
+
+  /* ---------- 第 47 步：速度記錄（連點頁首標題 5 下打開） ---------- */
+
+  var SPEED_KEY = 'yk_speed_v1';
+  var ACT_NAMES = { init: '首頁', menu: '菜單', submit: '送單', cancel: '取消', history: '我的訂單', apply: '申請', voteInfo: '投票頁', vote: '投票' };
+
+  function nowMs() { return window.performance && performance.now ? performance.now() : Date.now(); }
+
+  function logSpeed(action, ms, t, early) {
+    try {
+      var list = JSON.parse(localStorage.getItem(SPEED_KEY) || '[]');
+      list.unshift({ at: clockNow(), a: action, ms: Math.round(ms), t: t || null, e: early ? 1 : 0 });
+      localStorage.setItem(SPEED_KEY, JSON.stringify(list.slice(0, 30)));
+    } catch (x) {}
+  }
+
+  var $speed = document.createElement('div');
+  $speed.className = 'guide-wrap';
+  $speed.hidden = true;
+  document.body.appendChild($speed);
+  var titleTaps = [];
+
+  $title.addEventListener('click', function () {
+    var t = Date.now();
+    titleTaps = titleTaps.filter(function (x) { return t - x < 3000; });
+    titleTaps.push(t);
+    if (titleTaps.length >= 5) { titleTaps = []; openSpeed(); }
+  });
+
+  function sec(ms) { return (ms / 1000).toFixed(1) + ' 秒'; }
+
+  function openSpeed() {
+    var list = [];
+    try { list = JSON.parse(localStorage.getItem(SPEED_KEY) || '[]'); } catch (x) {}
+    $speed.innerHTML = '<div class="sheet-backdrop" data-spd="close"></div>' +
+      '<section class="guide speed" role="dialog" aria-modal="true">' +
+      '<h2>速度記錄</h2><p class="small muted">最近 30 次（新的在上面）。後端＝Apps Script 自己花的時間；其餘是網路、LINE、Google 啟動。</p>' +
+      '<div class="speed-list">' + (list.length ? list.map(function (r) {
+        var t = r.t;
+        return '<div class="speed-row"><span>' + esc(r.at) + '　' + esc(ACT_NAMES[r.a] || r.a) + (r.e ? '（先送）' : '') + '</span><b>' + sec(r.ms) + '</b>' +
+          (t ? '<div class="small muted">後端 ' + sec((t.v || 0) + (t.r || 0)) + '（驗證 ' + sec(t.v || 0) + '、讀試算表 ' + (t.n || 0) + ' 次、快取 ' + (t.h || 0) + ' 次）</div>' : '') + '</div>';
+      }).join('') : '<p class="muted">還沒有記錄。</p>') + '</div>' +
+      '<div class="btn-row"><button class="btn" data-spd="clear">清除記錄</button><button class="btn primary" data-spd="close">關閉</button></div></section>';
+    $speed.hidden = false;
+  }
+
+  $speed.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-spd]');
+    if (!b) return;
+    if (b.getAttribute('data-spd') === 'clear') { try { localStorage.removeItem(SPEED_KEY); } catch (x) {} return openSpeed(); }
+    $speed.hidden = true;
+  });
 
   /* ---------- 畫面切換 ---------- */
 
@@ -421,7 +619,7 @@
     var u = S.home.user;
     var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') +
       (S.forId ? '　<b>（正在幫 ' + esc(S.forName) + ' 點）</b>' : '') +
-      (S.homeStale ? '　<span class="tag">更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時
+      (S.homeStale ? '　<span class="tag" id="staleTag"' + (S.staleShow ? '' : ' hidden') + '>更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時；第 47 步：超過 2 秒才出現
 
     if (u.status === '未申請' || u.status === '待審核') {
       var pending = u.status === '待審核';
@@ -542,12 +740,29 @@
   }
 
   function openVote() {
+    // 第 47 步：背景預載過、或今天看過的先直接顯示，最新票數回來再換上
+    var known = S.voteInfo || (readDay(VOTE_KEY) || {}).d;
+    if (known && !S.forId) {
+      S.voteInfo = known;
+      go('vote');
+      if (voteBusy()) return; // 正在送票，送完會換成最新的
+      api('voteInfo').then(function (d) {
+        if (voteBusy()) return;
+        var changed = JSON.stringify(d) !== JSON.stringify(S.voteInfo);
+        S.voteInfo = d;
+        writeDay(VOTE_KEY, { d: d });
+        syncVoteCard(d);
+        if (changed && S.view === 'vote') renderVote();
+      }).catch(function () {}); // 先顯示的還在，更新不到就算了
+      return;
+    }
     setLoading('讀取中…');
     S.view = 'loading';
     api('voteInfo').then(function (d) {
       if (S.view !== 'loading') return; // 讀取中按了返回
       S.voteInfo = d;
       S.voteOk = null;
+      writeDay(VOTE_KEY, { d: d }); // 第 47 步
       go('vote');
     }).catch(showError);
   }
@@ -625,6 +840,7 @@
       if (Object.keys(voteSending).some(function (k) { return voteSending[k]; })) return; // 另一類還在送，等它回來再一起換
       S.voteInfo = d;
       S.voteOk = null;
+      writeDay(VOTE_KEY, { d: d }); // 第 47 步
       syncVoteCard(d);
       if (S.view === 'vote') renderVote();
     }).catch(function (e) {
@@ -653,26 +869,65 @@
   /* ---------- 菜單 ---------- */
 
   function openMenu(sessionId) {
-    setLoading('讀取菜單…');
-    S.view = 'loading';
     // 第 16 步：背景已經預載（或正在載）就直接用；只用一次，之後回首頁會重新載
     var pre = S.prefetch && S.prefetch[sessionId];
     if (pre) delete S.prefetch[sessionId];
-    (pre || api('menu', { sessionId: sessionId })).catch(function (e) {
-      if (pre) return api('menu', { sessionId: sessionId }); // 預載失敗就重新讀一次
-      throw e;
-    }).then(function (d) {
+    var fetchMenu = function () {
+      return (pre || api('menu', { sessionId: sessionId })).catch(function (e) {
+        if (pre) return api('menu', { sessionId: sessionId }); // 預載失敗就重新讀一次
+        throw e;
+      });
+    };
+    // 第 47 步：載過的菜單先直接顯示，最新的回來再悄悄換上
+    var known = knownMenu(sessionId);
+    if (known) {
+      showMenu(known);
+      var forId = S.forId;
+      fetchMenu().then(function (d) {
+        if (S.forId !== forId) return;
+        keepMenu(d);
+        freshMenu(d);
+      }).catch(function () {}); // 先顯示的還在；送單時後端會再檢查一次
+      return;
+    }
+    setLoading('讀取菜單…');
+    S.view = 'loading';
+    fetchMenu().then(function (d) {
+      keepMenu(d); // 第 47 步
       if (S.view !== 'loading') return; // 第 38 步：讀取中按了返回鍵，就不要再跳進菜單
-      S.menu = d;
-      S.cart = d.myOrder ? d.myOrder.lines.map(function (l) {
-        return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note, stale: !!l.stale, oldName: l.name };
-      }) : [];
-      S.cartStart = JSON.stringify(S.cart);
-      S.search = '';
-      S.lateFail = false; // 第 40 步
-      restoreCartDraft(); // 第 18 步
-      go('menu');
+      showMenu(d);
     }).catch(showError);
+  }
+
+  function cartFromOrder(d) {
+    return d.myOrder ? d.myOrder.lines.map(function (l) {
+      return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note, stale: !!l.stale, oldName: l.name };
+    }) : [];
+  }
+
+  function showMenu(d) {
+    S.menu = d;
+    S.cart = cartFromOrder(d);
+    S.cartStart = JSON.stringify(S.cart);
+    S.search = '';
+    S.lateFail = false; // 第 40 步
+    restoreCartDraft(); // 第 18 步
+    go('menu');
+  }
+
+  // 第 47 步：最新菜單回來了。沒變就不動；購物車沒改過才跟著換；正在打字、開著品項視窗時只換資料不重畫
+  function freshMenu(d) {
+    var m = S.menu;
+    if (!m || m.session.id !== d.session.id || (S.view !== 'menu' && S.view !== 'cart')) return;
+    if (JSON.stringify(d) === JSON.stringify(m)) return;
+    var untouched = !cartChanged();
+    S.menu = d;
+    if (untouched) { S.cart = cartFromOrder(d); S.cartStart = JSON.stringify(S.cart); }
+    var typing = document.activeElement && document.activeElement.id === 'menuSearch';
+    if (!$sheet.hidden || typing || S.busy) return;
+    var y = window.scrollY;
+    render();
+    window.scrollTo(0, y);
   }
 
   function cartChanged() { return JSON.stringify(S.cart) !== S.cartStart; }
@@ -981,6 +1236,7 @@
       S.busy = false;
       // 第 18 步：清掉暫存的購物車、記下「上次點的」，顯示已送出畫面
       clearCartDraft(S.menu.session.id);
+      forgetMenu(S.menu.session.id); // 第 47 步：裡面的「我的單」已經舊了，回首頁會重新預載
       if (!S.forId) saveLastOrder(S.menu, sent); // 第 20 步：幫別人點的不記成自己的「上次點的」
       S.done = { menu: S.menu, lines: sent, total: r.total, edited: !!S.menu.myOrder };
       go('done');
@@ -1003,6 +1259,7 @@
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }).then(function () {
       clearCartDraft(sessionId); // 第 18 步
+      forgetMenu(sessionId); // 第 47 步
       toast('訂單已取消');
       return loadHome();
     }).catch(showError);
@@ -1011,9 +1268,27 @@
   /* ---------- 我的訂單 ---------- */
 
   function openHistory() {
+    // 第 47 步：今天看過的先顯示（只限自己的），最新的回來再換上
+    var known = !S.forId && (readDay(HIST_KEY) || {}).d;
+    if (known) {
+      S.history = known;
+      go('history');
+      api('history').then(function (d) {
+        if (d.forName) return; // 中途換成幫別人點了
+        writeDay(HIST_KEY, { d: d });
+        if (S.view !== 'history' || S.forId) return;
+        var changed = JSON.stringify(d) !== JSON.stringify(S.history);
+        S.history = d;
+        if (changed) { var y = window.scrollY; render(); window.scrollTo(0, y); }
+      }).catch(function () {});
+      return;
+    }
     setLoading('讀取訂單…');
     S.view = 'history';
-    api('history').then(function (d) { if (S.view !== 'history') return; S.history = d; go('history'); }).catch(showError); // 第 38 步：讀取中按了返回就不跳
+    api('history').then(function (d) {
+      if (!S.forId && !d.forName) writeDay(HIST_KEY, { d: d }); // 第 47 步
+      if (S.view !== 'history') return; S.history = d; go('history');
+    }).catch(showError); // 第 38 步：讀取中按了返回就不跳
   }
 
   function renderHistory() {
@@ -1343,6 +1618,7 @@
     S.forId = id;
     S.forName = name;
     S.menu = null; S.cart = [];
+    S.menus = {}; // 第 47 步：載過的菜單裡有「我的單」，換人就不能用
     S.view = 'home';
     renderProxyBanner();
     loadHome(); // 重新讀這個人的首頁；背景預載的菜單也會換成這個人的
