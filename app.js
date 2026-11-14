@@ -57,6 +57,10 @@
  *     （購物車改過、正在打字搜尋、開著品項視窗時不重畫，只換資料）。首頁載完會在背景預載投票頁。
  *   - 送單、取消照舊等後端回應（不能讓同仁以為送出了其實沒有）。
  *   - 速度記錄：連點頁首標題 5 下，顯示最近 30 次各操作花的時間（存在這支手機，不上傳）。
+ *
+ * 第 47 步第二階段：LINE 驗證一次之後，後端回一張登入憑證（6 小時），存在這支手機（yk_sess_v1）。
+ *   之後每次都先帶這張憑證，不用再等 LINE 元件、也不用後端再問 LINE。過期或被清掉就自動改回 LINE 驗證。
+ *   LINE 元件載好後比對帳號，換了 LINE 帳號就丟掉舊憑證、重新載入首頁。
  */
 (function () {
   'use strict';
@@ -164,6 +168,28 @@
   var liffIsReady = false;
   var earlyTok = storedIdToken();
 
+  // 第 47 步第二階段：後端發的登入憑證（LINE 驗證一次，6 小時內不用再驗、也不用等 LINE 元件）
+  var SESS_KEY = 'yk_sess_v1';
+  var sess = loadSess();
+  function loadSess() {
+    try {
+      var v = JSON.parse(localStorage.getItem(SESS_KEY) || 'null');
+      if (v && /^[0-9a-f]{64}$/.test(v.s) && v.exp > Date.now()) return v;
+    } catch (x) {}
+    dropSess();
+    return null;
+  }
+  function saveSess(v) {
+    if (!v || !v.s) return;
+    sess = v;
+    try { localStorage.setItem(SESS_KEY, JSON.stringify(v)); } catch (x) {}
+  }
+  function dropSess() {
+    sess = null;
+    try { localStorage.removeItem(SESS_KEY); } catch (x) {}
+  }
+  function sessOk() { return !!(sess && sess.exp > Date.now()); }
+
   function storedIdToken() {
     try {
       for (var i = 0; i < localStorage.length; i++) {
@@ -181,7 +207,17 @@
 
   function api(action, data) {
     var p;
-    if (!liffIsReady && earlyTok) {
+    if (sessOk()) {
+      // 第 47 步第二階段：先用登入憑證；過期了再走原本的 LINE 驗證
+      p = apiOnce(action, data, liffIsReady ? '' : earlyTok, true).catch(function (e) {
+        if (e && (e.code === 'SESSION' || e.code === 'TOKEN')) {
+          dropSess();
+          if (e.code === 'TOKEN') earlyTok = '';
+          return liffReady.then(function () { return apiOnce(action, data); });
+        }
+        throw e;
+      });
+    } else if (!liffIsReady && earlyTok) {
       p = apiOnce(action, data, earlyTok).catch(function (e) {
         if (e && e.code === 'TOKEN') { earlyTok = ''; return liffReady.then(function () { return apiOnce(action, data); }); }
         throw e;
@@ -212,14 +248,17 @@
   var NET_MSG = '網路連線不穩，請確認網路後再按一次。'; // 第 37 步
 
   // tok：第 47 步，LINE 登入完成前用的憑證（有帶就不會因為過期而重新登入，由 api() 等登入完成再試）
-  function apiOnce(action, data, tok) {
+  // useSess：第 47 步第二階段，帶登入憑證（後端找不到憑證時，有 idToken 就照舊驗證）
+  function apiOnce(action, data, tok, useSess) {
     var idToken = tok || (liffIsReady && window.liff ? liff.getIDToken() : '');
+    var body = { action: action, idToken: idToken, data: withFor(action, data) };
+    if (useSess && sess) body.sess = sess.s;
     var t0 = nowMs();
     return fetch(CFG.API_URL, {
       method: 'POST',
       // 用 text/plain 送出，瀏覽器不會先發 CORS 預檢（Apps Script 不處理預檢）
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: action, idToken: idToken, data: withFor(action, data) }),
+      body: JSON.stringify(body),
       redirect: 'follow'
     }).catch(function () {
       // 第 37 步：斷線時瀏覽器只給英文（Failed to fetch／Load failed），改成中文
@@ -228,9 +267,10 @@
       if (!r.ok) throw new Error('連線失敗（' + r.status + '），請稍後再試一次。');
       return r.json().catch(function () { throw new Error('伺服器回應讀取失敗，請稍後再試一次。'); }); // 第 37 步
     }).then(function (res) {
-      logSpeed(action, nowMs() - t0, res.t, !!tok); // 第 47 步
+      logSpeed(action, nowMs() - t0, res.t, !!tok || !!body.sess); // 第 47 步
+      if (res.sess) saveSess(res.sess); // 第 47 步第二階段
       if (res.ok) return res.data;
-      if (res.code === 'TOKEN' && !tok && liffIsReady && window.liff) {
+      if (res.code === 'TOKEN' && !tok && !body.sess && liffIsReady && window.liff) {
         liff.logout();
         liff.login({ redirectUri: location.href });
       }
@@ -273,8 +313,8 @@
     if (!CFG.LIFF_ID || !CFG.API_URL) return showFatal('點餐頁還沒設定完成（config.js 的 LIFF_ID 或 API_URL 是空的），請通知行政。');
     var cached = !wantHistory && !wantVote && readHomeCache();
     if (cached) { S.home = cached; markStale(); go('home'); }
-    // 第 47 步：手機裡有沒過期的憑證，就不等 LINE 登入，先要首頁資料
-    var first = earlyTok ? loadHome(!!cached) : null;
+    // 第 47 步：手機裡有沒過期的憑證（登入憑證或 LINE 的），就不等 LINE 登入，先要首頁資料
+    var first = (sessOk() || earlyTok) ? loadHome(!!cached) : null;
     whenLiff().then(function () {
       return liff.init({ liffId: CFG.LIFF_ID });
     }).then(function () {
@@ -283,8 +323,11 @@
         return new Promise(function () {}); // 等待跳轉
       }
       liffIsReady = true;
+      // 第 47 步第二階段：手機上換了 LINE 帳號，舊的登入憑證不能用
+      var switched = false;
+      try { var me = liff.getDecodedIDToken(); if (sess && me && me.sub && me.sub !== sess.id) { dropSess(); switched = true; } } catch (x) {}
       liffReadyResolve();
-      if (!first) return loadHome(!!cached);
+      if (!first || switched) return loadHome(!!cached && !switched);
     }).catch(function (e) { showFatal(e.message); });
   }
 
