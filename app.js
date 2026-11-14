@@ -1205,7 +1205,8 @@
     var m = S.menu;
     $title.textContent = m.store.name;
     var cats = [];
-    m.items.forEach(function (i) { if (cats.indexOf(i.cat) < 0) cats.push(i.cat); });
+    var sold = m.soldOut || []; // 第 53 步紅隊 2：今天售完（灰色、不能點）
+    m.items.concat(sold).forEach(function (i) { if (cats.indexOf(i.cat) < 0) cats.push(i.cat); });
     var counts = {};
     S.cart.forEach(function (l) { counts[l.itemId] = (counts[l.itemId] || 0) + l.qty; });
 
@@ -1238,6 +1239,12 @@
         m.items.filter(function (i) { return i.cat === c; }).map(function (i) {
           return '<button class="item" data-act="item" data-ci="' + ci + '" data-id="' + esc(i.id) + '" data-q="' + esc((i.name + ' ' + (i.desc || '')).toLowerCase()) + '"' + (m.session.open ? '' : ' disabled') + '>' +
             '<span><span class="name">' + esc(i.name) + '</span>' + (counts[i.id] ? '<span class="count">' + counts[i.id] + '</span>' : '') +
+            (i.desc ? '<br><span class="desc">' + esc(i.desc) + '</span>' : '') + '</span>' +
+            '<span class="price">$' + i.price + '</span></button>';
+        }).join('') +
+        sold.filter(function (i) { return i.cat === c; }).map(function (i) { // 第 53 步紅隊 2
+          return '<button class="item soldout" data-ci="' + ci + '" data-q="' + esc((i.name + ' ' + (i.desc || '')).toLowerCase()) + '" disabled>' +
+            '<span><span class="name">' + esc(i.name) + '</span> <span class="tag">今天售完</span>' +
             (i.desc ? '<br><span class="desc">' + esc(i.desc) + '</span>' : '') + '</span>' +
             '<span class="price">$' + i.price + '</span></button>';
         }).join('');
@@ -1403,11 +1410,12 @@
 
   function lineHtml(l, i, editable) {
     var item = itemOf(l.itemId);
-    var name = item ? item.name : (l.oldName || l.itemId);
-    var price = l.stale ? '' : '$' + linePrice(l);
+    var so = !item && S.menu && (S.menu.soldOut || []).filter(function (x) { return x.id === l.itemId; })[0]; // 第 53 步紅隊 2
+    var name = item ? item.name : so ? so.name : (l.oldName || l.itemId);
+    var price = l.stale ? '' : '$' + (l.sub != null ? l.sub : linePrice(l)); // 第 53 步紅隊 3：送出後用伺服器算的金額
     return '<div class="line' + (l.stale ? ' stale' : '') + '">' +
       '<div class="row"><b>' + esc(name) + ' × ' + l.qty + '</b><b>' + price + '</b></div>' +
-      (l.stale ? '<div class="note">菜單已變動，' + (item ? '請按「修改」重新選擇' : '這個品項已下架，請刪除') + '</div>' : '') +
+      (l.stale ? '<div class="note">' + (so ? '今天售完了，請刪除' : '菜單已變動，' + (item ? '請按「修改」重新選擇' : '這個品項已下架，請刪除')) + '</div>' : '') +
       (!l.stale && optText(l) ? '<div class="opts-text">' + esc(optText(l)) + '</div>' : '') +
       (l.note ? '<div class="note">備註：' + esc(l.note) + '</div>' : '') +
       (editable ? '<div class="btn-row">' +
@@ -1494,14 +1502,18 @@
     var btn = document.getElementById('bottomBtn');
     btn.disabled = true; btn.textContent = '送出中…';
     var lines = S.cart.map(function (l) { return { itemId: l.itemId, optionIds: l.optionIds, qty: l.qty, note: l.note }; });
-    var sent = S.cart.slice();
+    var sent = S.cart.map(function (l) { return Object.assign({}, l); });
+    var shown = cartTotal(); // 第 53 步紅隊 3：送出前畫面上的金額
     api('submit', { sessionId: S.menu.session.id, lines: lines }).then(function (r) {
       S.busy = false;
       // 第 18 步：清掉暫存的購物車、記下「上次點的」，顯示已送出畫面
       clearCartDraft(S.menu.session.id);
       forgetMenu(S.menu.session.id); // 第 47 步：裡面的「我的單」已經舊了，回首頁會重新預載
       if (!S.forId) saveLastOrder(S.menu, sent); // 第 20 步：幫別人點的不記成自己的「上次點的」
-      S.done = { menu: S.menu, lines: sent, total: r.total, edited: !!S.menu.myOrder };
+      // 第 53 步紅隊 3：伺服器照最新菜單算的金額和畫面不同 → 每行改用伺服器的金額，已送出畫面提示
+      var changed = Number(r.total) !== shown;
+      if (changed && Array.isArray(r.subs) && r.subs.length === sent.length) sent.forEach(function (l, i) { l.sub = r.subs[i]; });
+      S.done = { menu: S.menu, lines: sent, total: r.total, edited: !!S.menu.myOrder, shown: changed ? shown : null };
       go('done');
       return loadHome(true); // 背景更新首頁資料，不換畫面
     }).catch(function (e) {
@@ -1513,6 +1525,7 @@
         return;
       }
       btn.disabled = false; btn.textContent = sendLabel(); // 第 31 步
+      if (e.code === 'MENU') forgetMenu(S.menu.session.id); // 第 53 步紅隊 2：菜單變了（例如今天售完），下次打開重讀
       alertMsg(e.message);
     });
   }
@@ -1591,6 +1604,7 @@
       '<p class="center-text small muted">' + esc(m.session.type) + '・' + esc(m.store.name) + '・訂購人 ' + esc(m.userName || '') + '</p>' +
       d.lines.map(function (l, i) { return lineHtml(l, i, false); }).join('') +
       '<div class="total-row"><span>總金額</span><span>$' + d.total + '</span></div></div>' +
+      (d.shown != null ? '<div class="notice">價格剛更新：購物車顯示 $' + d.shown + '，實際金額 $' + d.total + '（以這個為準）。</div>' : '') + // 第 53 步紅隊 3
       (S.forId ? '<div class="notice">已記在 ' + esc(S.forName) + ' 名下（行政代點）。</div>'
         : '<div class="notice">' + esc(m.session.cutoff) + ' 截止前都可以回首頁修改或取消。餐點送到後再付錢給行政。</div>') +
       (next ? '<button class="btn primary block" data-act="menu" data-id="' + esc(next.id) + '">接著點' + esc(next.type) + '：' + esc(next.storeName) + '</button><div style="height:8px"></div>' : '') +

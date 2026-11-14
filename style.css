@@ -94,6 +94,8 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
   padding: 12px 14px; margin-bottom: 8px;
 }
 .item .name { font-weight: 600; }
+.item.soldout { opacity: .55; cursor: default; } /* 第 53 步紅隊 2：今天售完 */
+.item.soldout .name { text-decoration: line-through; }
 .item .desc { font-size: 13px; color: var(--muted); }
 .item .price { font-weight: 600; white-space: nowrap; }
 .item .count {
