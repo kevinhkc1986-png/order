@@ -42,14 +42,21 @@
  *   - 購物車按「刪除」先確認。
  *   - 行政代點送出後，送出成功畫面有「繼續幫 ○○ 點」和「改回自己」。
  *   - 還沒付的單標籤改成灰色「待付款」；改單前已付過的單顯示「已付 $X，差 $Y」或「已付 $X，要退 $Y」（第 39 步 credit）。
+ * 第 42 步（紅隊 10）：等待核准頁開著時每 30 秒自動檢查一次（頁面在背景時暫停、回到前景馬上查），
+ *   核准後自動切到首頁（接著照舊跳出 3 頁使用說明）。文字改成「等待核准後就可以點餐。」。
+ * 第 46 步（投票）：
+ *   - 首頁最下面多一張「候選店」卡片（後端有給 vote 才顯示：Settings「投票開放」或測試人員），
+ *     列出下一個有投票的日子的候選店、自己選了哪家，按「看看大家想吃什麼 ›」進投票頁。不催投票。
+ *   - 投票頁：點一家就算選，截止前點別家就是改票；選過的那一類才看得到票數，不顯示誰投哪家。
+ *   - 網址帶 ?view=vote（LINE「投票」回覆的連結）直接開投票頁。行政代點時不顯示投票。
  */
 (function () {
   'use strict';
- 
+
   var CFG = window.APP_CONFIG || {};
   var MAX_QTY = 20; // 每行最多幾份（和 Api.gs 的 MAX_QTY 相同）
   var WARN_MIN = 15; // 第 18 步：截止前幾分鐘開始顯示紅色倒數
- 
+
   var $view = document.getElementById('view');
   var $bottom = document.getElementById('bottom');
   var $title = document.getElementById('title');
@@ -58,7 +65,7 @@
   var $sheet = document.getElementById('sheet');
   var $sheetBody = document.getElementById('sheetBody');
   var $toast = document.getElementById('toast');
- 
+
   // 全部狀態放這裡
   var S = {
     home: null,      // init 回傳：user、today、sessions
@@ -69,7 +76,7 @@
     forId: '',       // 第 20 步：行政正在幫誰點（空白＝自己）
     forName: ''
   };
- 
+
   // 第 20 步：幫別人點的時候，畫面最上面的黃色提示（index.html 不用改，這裡自己加）
   var $proxy = document.createElement('div');
   $proxy.className = 'proxy-banner';
@@ -78,9 +85,9 @@
   $proxy.addEventListener('click', function (e) {
     if (e.target.closest('[data-act="proxyOff"]')) setProxy('', '');
   });
- 
+
   /* ---------- 第 25 步：首次使用導覽（只有文字；看過記在這支手機） ---------- */
- 
+
   var GUIDE_KEY = 'yk_guide_v2'; // 第 31 步：說明改了，讓大家再看一次
   var GUIDE_PAGES = [
     { h: '選今天的店', p: '每天會開一家餐點、一家飲料。在首頁找到想點的店，按「開始點餐」。' },
@@ -92,17 +99,17 @@
   $guide.hidden = true;
   document.body.appendChild($guide);
   var guidePage = 0;
- 
+
   function guideSeen() { try { return !!localStorage.getItem(GUIDE_KEY); } catch (x) { return true; } }
   function markGuideSeen() { try { localStorage.setItem(GUIDE_KEY, '1'); } catch (x) {} }
- 
+
   function openGuide() { guidePage = 0; renderGuide(); $guide.hidden = false; syncBack(); }
   function closeGuide() { $guide.hidden = true; markGuideSeen(); syncBack(); } // 第 38 步：syncBack
   function maybeShowGuide() {
     if (S.forId || !$guide.hidden || guideSeen()) return;
     openGuide();
   }
- 
+
   function renderGuide() {
     var g = GUIDE_PAGES[guidePage];
     var last = guidePage === GUIDE_PAGES.length - 1;
@@ -120,7 +127,7 @@
       '<button class="btn primary" data-gact="' + (last ? 'done' : 'next') + '">' + (last ? '開始使用' : '下一步') + '</button>' +
       '</div></section>';
   }
- 
+
   $guide.addEventListener('click', function (e) {
     var b = e.target.closest('[data-gact]');
     if (!b) return;
@@ -129,22 +136,22 @@
     if (a === 'prev') { guidePage--; return renderGuide(); }
     closeGuide();
   });
- 
+
   function guideLink() {
     return S.forId ? '' : '<p class="center-text guide-link"><button class="link-btn" data-act="guide">使用說明</button></p>';
   }
- 
+
   var PROXY_ACTIONS = { init: true, menu: true, submit: true, cancel: true, history: true };
- 
+
   /* ---------- 呼叫後端 ---------- */
- 
+
   // 第 16 步：LINE 登入完成前先不送出請求（先顯示上次的首頁時，按鈕可能比登入還早被按）
   var liffReadyResolve;
   var liffReady = new Promise(function (r) { liffReadyResolve = r; });
- 
+
   // 第 16 步：送單這類要排隊的操作，遇到 BUSY（系統忙碌）自動再送一次
   var RETRY_ON_BUSY = { submit: true, cancel: true, apply: true };
- 
+
   function api(action, data) {
     return liffReady.then(function () { return apiOnce(action, data); }).catch(function (e) {
       if (e && e.code === 'BUSY' && RETRY_ON_BUSY[action]) {
@@ -153,7 +160,7 @@
       throw e;
     });
   }
- 
+
   // 第 20 步：幫別人點的時候，每個請求都帶上對方的 LineID（後端會再確認自己是行政）
   function withFor(action, data) {
     data = data || {};
@@ -165,9 +172,9 @@
     }
     return data;
   }
- 
+
   var NET_MSG = '網路連線不穩，請確認網路後再按一次。'; // 第 37 步
- 
+
   function apiOnce(action, data) {
     var idToken = window.liff ? liff.getIDToken() : '';
     return fetch(CFG.API_URL, {
@@ -193,9 +200,9 @@
       throw e;
     });
   }
- 
+
   /* ---------- 啟動 ---------- */
- 
+
   // 網址帶 ?view=history 就直接開「我的訂單」。LIFF 第一次開啟時參數可能還包在 liff.state 裡，兩種都看。
   var wantHistory = (function () {
     var q = location.search;
@@ -203,11 +210,18 @@
     if (m) { try { q += '&' + decodeURIComponent(m[1]).replace(/^[^?]*\?/, ''); } catch (x) {} }
     return /(^|[?&])view=history(&|$)/.test(q);
   })();
- 
+  // 第 46 步：?view=vote 直接開投票頁（和 ?view=history 一樣的看法）
+  var wantVote = (function () {
+    var q = location.search;
+    var m = q.match(/[?&]liff\.state=([^&]*)/);
+    if (m) { try { q += '&' + decodeURIComponent(m[1]).replace(/^[^?]*\?/, ''); } catch (x) {} }
+    return /(^|[?&])view=vote(&|$)/.test(q);
+  })();
+
   function start() {
     if (!CFG.LIFF_ID || !CFG.API_URL) return showFatal('點餐頁還沒設定完成（config.js 的 LIFF_ID 或 API_URL 是空的），請通知行政。');
     if (!window.liff) return showFatal('LINE 登入元件載入失敗，請關閉後重新開啟。');
-    var cached = !wantHistory && readHomeCache();
+    var cached = !wantHistory && !wantVote && readHomeCache();
     if (cached) { S.home = cached; S.homeStale = true; go('home'); }
     liff.init({ liffId: CFG.LIFF_ID }).then(function () {
       if (!liff.isLoggedIn()) {
@@ -218,7 +232,7 @@
       return loadHome(!!cached);
     }).catch(function (e) { showFatal(e.message); });
   }
- 
+
   // quiet = true：畫面上已經有上次的首頁，不要換成「載入中…」
   function loadHome(quiet) {
     if (!quiet) setLoading('載入中…');
@@ -232,20 +246,21 @@
       if (!keepView) { S.menu = null; S.cart = []; go('home'); }
       // 第 4 步：圖文選單「我的訂單」用 ?view=history 開啟時，直接進我的訂單（只在第一次載入時）
       if (wantHistory && d.user.status === '核准') { wantHistory = false; openHistory(); return; }
+      if (wantVote && d.user.status === '核准') { wantVote = false; if (d.vote) { openVote(); return; } } // 第 46 步
       prefetchMenus();
     }).catch(function (e) { S.homeStale = false; showError(e); });
   }
- 
+
   /* ---------- 第 16 步：上次的首頁、背景預載菜單 ---------- */
- 
+
   var HOME_KEY = 'yk_home_v1';
- 
+
   function localToday() {
     var d = new Date();
     function p2(n) { return (n < 10 ? '0' : '') + n; }
     return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
   }
- 
+
   function readHomeCache() {
     try {
       var d = JSON.parse(localStorage.getItem(HOME_KEY) || 'null');
@@ -253,14 +268,14 @@
     } catch (x) {}
     return null;
   }
- 
+
   function saveHomeCache(d) {
     try {
       if (d && d.user && d.user.status === '核准') localStorage.setItem(HOME_KEY, JSON.stringify(d));
       else localStorage.removeItem(HOME_KEY);
     } catch (x) {}
   }
- 
+
   // 一家一家載（不同時送出），避免大家同時打開時一次佔用太多 Apps Script 執行數
   function prefetchMenus() {
     var list = ((S.home && S.home.sessions) || []).filter(function (s) { return !s.canceled; });
@@ -274,16 +289,16 @@
       });
     }, Promise.resolve());
   }
- 
+
   /* ---------- 畫面切換 ---------- */
- 
+
   function go(view) {
     S.view = view;
     closeSheet();
     window.scrollTo(0, 0);
     render();
   }
- 
+
   function render() {
     var approved = S.home && S.home.user.status === '核准';
     $historyBtn.hidden = !(approved && S.view === 'home');
@@ -293,23 +308,23 @@
     renderProxyBanner(); // 第 20 步
     if (S.view === 'menu' || S.view === 'cart' || S.view === 'confirm') saveCartDraft(); // 第 18 步
     if (S.view === 'confirm') S.view = 'cart'; // 第 31 步：確認頁已拿掉，併進購物車
-    ({ home: renderHome, menu: renderMenu, cart: renderCart, history: renderHistory, done: renderDone })[S.view]();
+    ({ home: renderHome, menu: renderMenu, cart: renderCart, history: renderHistory, done: renderDone, vote: renderVote })[S.view](); // 第 46 步：vote
     refreshCountdown();
     syncBack(); // 第 38 步
   }
- 
+
   /* ---------- 第 38 步：手機返回鍵回上一層（原本 Android 按返回會直接關掉點餐頁） ----------
      做法：不在首頁、或有視窗開著時，在瀏覽器歷史紀錄多放一筆「記號」。
      按返回鍵時瀏覽器先吃掉記號（不會離開頁面），再做和左上角「‹」一樣的動作。
      用「‹」回到首頁時，自己把記號清掉，首頁按一次返回就能離開。 */
- 
+
   var guardOn = false; // 歷史紀錄裡現在有沒有記號
   var skipPop = 0;     // 自己清記號時觸發的 popstate 要略過
- 
+
   function canGoBack() {
     return !$guide.hidden || !$sheet.hidden || S.err || S.view !== 'home';
   }
- 
+
   function syncBack() {
     if (!window.history || !history.pushState) return;
     var want = canGoBack();
@@ -319,7 +334,7 @@
       guardOn = false; skipPop++; history.back();
     }
   }
- 
+
   function goBack() {
     if (S.busy) return; // 送出中先不動，等送完
     if (!$guide.hidden) return closeGuide();
@@ -331,14 +346,14 @@
     if (S.view === 'menu' && S.menu && S.menu.session.open && S.cart.length && cartChanged()) toast('購物車已暫存，截止前記得回來送出');
     go('home');
   }
- 
+
   window.addEventListener('popstate', function () {
     if (skipPop) { skipPop--; return; }
     guardOn = false; // 記號被返回鍵吃掉了
     goBack();
     syncBack(); // 還沒回到首頁就再放一筆記號
   });
- 
+
   $back.addEventListener('click', function () {
     if (S.view === 'cart') return go('menu');
     // 第 18 步：購物車已經存在手機裡，離開不用再確認，只提醒一下
@@ -346,40 +361,96 @@
     go('home');
   });
   $historyBtn.addEventListener('click', openHistory);
- 
+
+  /* ---------- 第 42 步：等待核准時自動檢查 ---------- */
+
+  var PENDING_POLL_MS = 30000;
+  var pendingTimer = null;
+  var pendingBusy = false;
+  var pendingLast = clockNow();
+
+  function clockNow() {
+    var d = new Date();
+    function p2(n) { return (n < 10 ? '0' : '') + n; }
+    return p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds());
+  }
+
+  function isPendingHome() {
+    return S.view === 'home' && !S.forId && S.home && S.home.user && S.home.user.status === '待審核';
+  }
+
+  function stopPendingPoll() { if (pendingTimer) clearTimeout(pendingTimer); pendingTimer = null; }
+
+  function startPendingPoll() {
+    stopPendingPoll();
+    pendingTimer = setTimeout(pendingTick, PENDING_POLL_MS);
+  }
+
+  function pendingTick() {
+    pendingTimer = null;
+    if (!isPendingHome()) return;
+    if (document.hidden || pendingBusy) { startPendingPoll(); return; } // 在背景就先不查
+    pendingBusy = true;
+    api('init').then(function (d) {
+      pendingBusy = false;
+      pendingLast = clockNow();
+      if (!isPendingHome()) return;
+      if (d.user && d.user.status !== '待審核') {
+        // 核准（或停用）了：換成新的首頁，核准的話 renderHome 會照舊跳出使用說明
+        S.home = d;
+        saveHomeCache(d);
+        go('home');
+        prefetchMenus();
+        return;
+      }
+      S.home = d;
+      var el = document.getElementById('pendingCheck'); // 只更新時間，不重畫（姓名欄正在打字也不會被清掉）
+      if (el) el.textContent = '⟳ 每 ' + (PENDING_POLL_MS / 1000) + ' 秒自動檢查一次（上次檢查時間 ' + pendingLast + '）';
+      startPendingPoll();
+    }).catch(function () { pendingBusy = false; startPendingPoll(); }); // 網路不穩就下次再查，不跳錯誤
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && isPendingHome() && pendingTimer) { stopPendingPoll(); pendingTick(); } // 回到前景馬上查一次
+  });
+
   /* ---------- 首頁 ---------- */
- 
+
   function renderHome() {
     $title.textContent = 'YK中午吃什麼-點餐系統';
     var u = S.home.user;
     var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') +
       (S.forId ? '　<b>（正在幫 ' + esc(S.forName) + ' 點）</b>' : '') +
       (S.homeStale ? '　<span class="tag">更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時
- 
+
     if (u.status === '未申請' || u.status === '待審核') {
       var pending = u.status === '待審核';
+      if (pending && !pendingTimer) pendingLast = clockNow(); // 第 42 步：剛讀過首頁，就是剛檢查過
       $view.innerHTML = hello +
         '<div class="card">' +
         (pending
-          ? '<h2>已送出申請</h2><p>等待行政核准後就可以點餐。核准後重新開啟這個頁面即可。</p>'
+          ? '<h2>已送出申請</h2><p>等待核准後就可以點餐。</p>' + // 第 42 步
+            '<p class="muted small" id="pendingCheck">⟳ 每 ' + (PENDING_POLL_MS / 1000) + ' 秒自動檢查一次（上次檢查時間 ' + esc(pendingLast) + '）</p>'
           : '<h2>第一次使用</h2><p>請填寫你的姓名送出申請，行政核准後就可以點餐。</p>') +
         '<label class="field" for="realName">姓名</label>' +
         '<input id="realName" type="text" maxlength="20" autocomplete="name" value="' + esc(u.realName || '') + '" placeholder="例如：王小明">' +
         '<div class="btn-row"><button class="btn primary" data-act="apply">' + (pending ? '更新姓名' : '送出申請') + '</button></div>' +
         (pending ? '<div class="btn-row"><button class="btn" data-act="reload">重新整理</button></div>' : '') +
         '</div>';
+      if (pending) startPendingPoll(); else stopPendingPoll(); // 第 42 步
       return;
     }
+    stopPendingPoll(); // 第 42 步
     if (u.status !== '核准') {
       $view.innerHTML = hello + '<div class="card"><h2>帳號已停用</h2><p>如有疑問請聯絡行政。</p></div>';
       return;
     }
- 
+
     var all = S.home.sessions || [];
     var list = all.filter(function (s) { return !s.canceled; }); // 第 29 步：已取消的團不顯示
     var voided = voidedNotices(all); // 第 37 步
     if (!list.length) {
-      $view.innerHTML = hello + proxyPicker() + voided + '<div class="card center"><p>' + (all.length ? '今天沒有可以點餐的店。' : '今天還沒有開團。') + '</p><button class="btn" data-act="reload">重新整理</button></div>' + guideLink();
+      $view.innerHTML = hello + proxyPicker() + voided + '<div class="card center"><p>' + (all.length ? '今天沒有可以點餐的店。' : '今天還沒有開團。') + '</p><button class="btn" data-act="reload">重新整理</button></div>' + voteCard() + guideLink(); // 第 46 步
       maybeShowGuide(); // 第 25 步
       return;
     }
@@ -418,10 +489,10 @@
         (draftN ? '<div class="cart-pending">⚠ 購物車有 ' + draftN + ' 份' + (o ? '修改' : '') + '<b>還沒送出</b>，按「' + (o ? '修改訂單' : '繼續點餐') + '」→「送出訂單」才算點好</div>' : '') + // 第 31 步：紅框
         editHint(s, o) + // 第 25 步
         '<div class="btn-row">' + btns + '</div></div>';
-    }).join('') + guideLink();
+    }).join('') + voteCard() + guideLink(); // 第 46 步
     maybeShowGuide(); // 第 25 步
   }
- 
+
   // 第 40 步：付款標籤。credit＝改單前已付、可以抵用的錢（第 39 步後端給的）
   function payTag(o) {
     if (o.paid) return '<span class="tag open">已付款</span>';
@@ -434,7 +505,7 @@
     }
     return '<span class="tag due">待付款</span>'; // 第 40 步：原本橘色「未付款」，餐點送到才收錢，改成灰色
   }
- 
+
   // 第 37 步：取消的團有作廢的訂單時，首頁最上方的黃色提示
   function voidedNotices(all) {
     var who = S.forId ? S.forName + ' 的' : '你的';
@@ -444,7 +515,7 @@
         (v.paid ? '。已付款，請找行政退款' : '') + '</div>';
     }).join('');
   }
- 
+
   // 第 25 步：已點餐時，按鈕上方說明還能不能改
   function editHint(s, o) {
     if (!o) return '';
@@ -452,9 +523,97 @@
     if (s.open) return '<p class="small edit-hint">' + esc(s.cutoff) + ' 截止前都可以修改或取消</p>';
     return '<p class="small edit-hint muted">已截止</p>'; // 第 31 步：拿掉「要更改請找行政」
   }
- 
+
+  /* ---------- 第 46 步：投票 ---------- */
+
+  // 首頁的候選店卡片：介紹下一次有哪些店，不催投票
+  function voteCard() {
+    var v = S.home && S.home.vote;
+    if (!v || S.forId) return '';
+    return '<div class="card vote-card"><h3>🍱 ' + esc(v.when) + ' 候選店</h3>' +
+      v.types.map(function (t) {
+        var mine = t.candidates.filter(function (c) { return c.id === t.myVote; })[0];
+        return '<div class="vote-row"><span class="tag type">' + esc(t.type) + '</span>' +
+          esc(t.candidates.map(function (c) { return c.name; }).join('・')) +
+          (mine ? '<span class="vote-mine">✓ 你選了' + esc(mine.name) + '</span>' : '') + '</div>';
+      }).join('') +
+      '<p class="small muted vote-hint">想吃哪家可以選一下（' + esc(v.cutoffLabel) + ' 前）</p>' +
+      '<div class="vote-more"><button class="link-btn" data-act="vote">看看大家想吃什麼 ›</button></div></div>';
+  }
+
+  function openVote() {
+    setLoading('讀取中…');
+    S.view = 'loading';
+    api('voteInfo').then(function (d) {
+      if (S.view !== 'loading') return; // 讀取中按了返回
+      S.voteInfo = d;
+      go('vote');
+    }).catch(showError);
+  }
+
+  function renderVote() {
+    var days = (S.voteInfo && S.voteInfo.days) || [];
+    $title.textContent = days.length === 1 ? days[0].label + '吃什麼' : '想吃哪家';
+    if (!days.length) {
+      $view.innerHTML = '<div class="card center"><p>目前沒有進行中的投票。</p><button class="btn" data-act="home">回首頁</button></div>';
+      return;
+    }
+    $view.innerHTML = days.map(function (d) {
+      return (days.length > 1 ? '<h3 class="vote-day">' + esc(d.label) + '</h3>' : '') +
+        '<p class="small muted">' + esc(d.cutoffLabel) + ' 截止</p>' +
+        d.types.map(function (t) {
+          var voted = !!t.myVote;
+          var total = voted ? t.candidates.reduce(function (n, c) { return n + (c.count || 0); }, 0) : 0;
+          return '<div class="card"><div class="vote-head"><span class="tag type">' + esc(t.type) + '</span>' +
+            '<span class="small muted">' + (voted ? '可改票' : '投完看票數') + '</span></div>' +
+            t.candidates.map(function (c) {
+              var me = c.id === t.myVote;
+              var pct = voted && total ? Math.round((c.count || 0) * 100 / total) : 0;
+              return '<button class="vote-opt' + (me ? ' me' : '') + '" data-act="castVote" data-date="' + esc(d.date) +
+                '" data-type="' + esc(t.type) + '" data-id="' + esc(c.id) + '"' + (S.voteBusy ? ' disabled' : '') + '>' +
+                (voted ? '<span class="vote-fill" style="width:' + pct + '%"></span>' : '') +
+                '<span class="vote-dot"></span><span class="vote-name">' + esc(c.name) + '</span>' +
+                (voted ? '<span class="vote-n">' + (c.count || 0) + ' 票</span>' : '') + '</button>';
+            }).join('') + '</div>';
+        }).join('');
+    }).join('') + '<p class="small muted center-text">最後由行政決定</p>';
+  }
+
+  function castVote(date, type, storeId) {
+    var day = (S.voteInfo.days || []).filter(function (d) { return d.date === date; })[0];
+    var t = day && day.types.filter(function (x) { return x.type === type; })[0];
+    if (!t || t.myVote === storeId || S.voteBusy) return;
+    S.voteBusy = true;
+    renderVote();
+    api('vote', { date: date, type: type, storeId: storeId }).then(function (d) {
+      S.voteBusy = false;
+      S.voteInfo = d;
+      syncVoteCard(d);
+      if (S.view === 'vote') renderVote();
+      toast('已選好，截止前都可以改');
+    }).catch(function (e) {
+      S.voteBusy = false;
+      if (e && e.code === 'CLOSED') { toast(e.message); return openVote(); }
+      if (S.view === 'vote') renderVote();
+      showError(e);
+    });
+  }
+
+  // 投完回首頁時，卡片上的「你選了」也要跟著變（不用重新讀首頁）
+  function syncVoteCard(d) {
+    var v = S.home && S.home.vote;
+    if (!v) return;
+    var same = (d.days || []).filter(function (x) { return x.date === v.date; })[0];
+    if (!same) return;
+    v.types.forEach(function (t) {
+      var n = same.types.filter(function (x) { return x.type === t.type; })[0];
+      if (n) t.myVote = n.myVote;
+    });
+    if (!S.forId) saveHomeCache(S.home);
+  }
+
   /* ---------- 菜單 ---------- */
- 
+
   function openMenu(sessionId) {
     setLoading('讀取菜單…');
     S.view = 'loading';
@@ -477,9 +636,9 @@
       go('menu');
     }).catch(showError);
   }
- 
+
   function cartChanged() { return JSON.stringify(S.cart) !== S.cartStart; }
- 
+
   // 第 15 步：店名、備註下方的「看菜單圖」連結（開雲端硬碟看圖頁，可放大，按返回回到點餐頁）
   function menuImageLinks(list) {
     if (!list || !list.length) return '';
@@ -489,7 +648,7 @@
       return '<a href="' + esc(url) + '" target="_blank" rel="noopener"' + style + '>' + label + '</a>';
     }).join('') + '</p>';
   }
- 
+
   function renderMenu() {
     var m = S.menu;
     $title.textContent = m.store.name;
@@ -497,7 +656,7 @@
     m.items.forEach(function (i) { if (cats.indexOf(i.cat) < 0) cats.push(i.cat); });
     var counts = {};
     S.cart.forEach(function (l) { counts[l.itemId] = (counts[l.itemId] || 0) + l.qty; });
- 
+
     var head = '<div class="store-info"><span class="tag type">' + esc(m.session.type) + '</span> ' +
       (m.session.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
         : m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
@@ -506,10 +665,10 @@
     if (m.session.notice) head += '<div class="notice">公告：' + esc(m.session.notice) + '</div>';
     if (m.session.canceled) head += '<div class="notice">這一團已經取消，只能看菜單。</div>';
     else if (!m.session.open) head += '<div class="notice">這一團已經截止，只能看菜單。</div>';
- 
+
     if (m.session.late) head += '<div class="notice">這一團已經截止，你是行政，可以幫忙補單或改單。</div>';
     if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示）
- 
+
     var chips = cats.length > 1 ? '<nav class="cats">' + cats.map(function (c, i) {
       return '<button class="chip' + (i === 0 ? ' on' : '') + '" data-act="cat" data-i="' + i + '">' + esc(c) + '</button>';
     }).join('') + '</nav>' : '';
@@ -518,7 +677,7 @@
       '<input id="menuSearch" type="search" placeholder="搜尋品項，例如：雞腿、紅茶" autocomplete="off" value="' + esc(S.search || '') + '">' +
       '<button class="search-clear" data-act="clearSearch" aria-label="清除搜尋"' + (S.search ? '' : ' hidden') + '>×</button></div>' +
       chips + '</div>';
- 
+
     var body = cats.map(function (c, ci) {
       return '<h3 class="cat-title" id="cat' + ci + '" data-ci="' + ci + '">' + esc(c) + '</h3>' +
         m.items.filter(function (i) { return i.cat === c; }).map(function (i) {
@@ -528,13 +687,13 @@
             '<span class="price">$' + i.price + '</span></button>';
         }).join('');
     }).join('');
- 
+
     $view.innerHTML = head + tools + body + '<p class="center muted" id="noMatch" hidden>找不到符合的品項</p>';
     document.getElementById('menuSearch').addEventListener('input', function (e) { applySearch(e.target.value); });
     if (S.search) applySearch(S.search); else spyCategory(); // 重畫後（例如加入購物車）分類標示跟著目前位置
     if (m.session.open) showCartBar('查看購物車', function () { go('cart'); }, !S.cart.length);
   }
- 
+
   function showCartBar(label, onClick, disabled, wide) {
     var n = S.cart.reduce(function (s, l) { return s + l.qty; }, 0);
     $bottom.innerHTML = '<div class="cd-bar" id="cdBar" hidden></div><div class="inner">' +
@@ -543,12 +702,12 @@
     $bottom.hidden = false;
     document.getElementById('bottomBtn').onclick = onClick;
   }
- 
+
   /* ---------- 計價（和 Api.gs 的規則相同，只做顯示；實際金額以後端計算為準） ---------- */
- 
+
   function itemOf(id) { return S.menu.items.filter(function (i) { return i.id === id; })[0]; }
   function groupsOf(item) { return item.groupIds.map(function (g) { return S.menu.groups[g]; }); }
- 
+
   function linePrice(l) {
     var item = itemOf(l.itemId);
     if (!item) return 0;
@@ -562,7 +721,7 @@
   // 第 6 步：合計必須是整數才能送出（例如 7.5 元的水餃點單數顆會出現 .5 元）
   function isWhole(n) { return Math.abs(n - Math.round(n)) < 1e-6; }
   function wholeMsg() { return '合計 $' + cartTotal() + ' 不是整數，請調整數量'; }
- 
+
   function optText(l) {
     var item = itemOf(l.itemId);
     if (!item) return '';
@@ -571,22 +730,22 @@
       return picked.length ? g.name + '：' + picked.map(function (o) { return o.name + (o.price ? '(+' + o.price + ')' : ''); }).join('、') : '';
     }).filter(Boolean).join('；');
   }
- 
+
   function ruleText(g) {
     if (g.single) return g.required ? '必選・選 1' : '可不選・最多 1';
     if (g.min === g.max) return '必選・選 ' + g.min;
     return g.min ? '選 ' + g.min + '～' + g.max : '可不選・最多 ' + g.max;
   }
- 
+
   function groupOk(g, ids) {
     var n = g.options.filter(function (o) { return ids.indexOf(o.id) >= 0; }).length;
     return n >= g.min && n <= g.max;
   }
- 
+
   /* ---------- 選項視窗 ---------- */
- 
+
   var draft = null; // { itemId, optionIds, qty, note, index }
- 
+
   function openItem(itemId, index) {
     var item = itemOf(itemId);
     if (!item) return;
@@ -604,7 +763,7 @@
     $sheet.hidden = false;
     syncBack(); // 第 38 步
   }
- 
+
   function renderSheet() {
     var item = itemOf(draft.itemId);
     var groups = groupsOf(item);
@@ -628,7 +787,7 @@
       '<div class="sheet-foot btn-row"><button class="btn" data-sact="close">取消</button>' + // 第 40 步：固定在視窗底部
       '<button class="btn primary" data-sact="save">' + (draft.index != null ? '更新' : '加入購物車') + '　$' + linePrice(draft) + '</button></div>';
   }
- 
+
   $sheetBody.addEventListener('click', function (e) {
     var b = e.target.closest('[data-sact]');
     if (!b) return;
@@ -669,9 +828,9 @@
     renderSheet();
   });
   $sheet.querySelector('[data-close]').addEventListener('click', askCloseSheet); // 第 40 步：點背景有改過先問
- 
+
   function closeSheet() { $sheet.hidden = true; syncBack(); } // 第 38 步：syncBack
- 
+
   // 第 40 步：品項視窗有沒有改過（選項、數量、備註）
   function draftSig() {
     var noteEl = document.getElementById('lineNote');
@@ -683,9 +842,9 @@
     if (draftSig() !== draft.start && !window.confirm('還沒加入購物車，要放棄嗎？')) return;
     closeSheet();
   }
- 
+
   /* ---------- 購物車 ---------- */
- 
+
   function lineHtml(l, i, editable) {
     var item = itemOf(l.itemId);
     var name = item ? item.name : (l.oldName || l.itemId);
@@ -700,12 +859,12 @@
         (item ? '<button class="btn" data-act="edit" data-i="' + i + '">修改</button>' : '') + '</div>' : '') +
       '</div>';
   }
- 
+
   // 第 31 步：購物車就是最後一步，底部大按鈕直接送出（原本的「確認訂單」頁拿掉）
   function sendLabel() {
     return (S.menu && S.menu.myOrder ? '送出修改' : '送出訂單') + ' $' + cartTotal();
   }
- 
+
   function renderCart() {
     var m = S.menu;
     $title.textContent = '購物車';
@@ -736,7 +895,7 @@
     if (S.lateFail) return showCartBar('已截止，請找行政補單', submitOrder, true, true); // 第 40 步
     showCartBar(stale ? '請先處理標示的品項' : (odd ? '金額需為整數' : sendLabel()), submitOrder, !S.cart.length || stale || odd || S.busy, true);
   }
- 
+
   // 第 40 步：截止後送不出的提示＋複製購物車內容
   function lateFailHtml() {
     return '<div class="notice late-fail"><b>已過截止時間，這張單送不出去。</b><br>請找行政幫你補單，可以先複製購物車內容貼給行政。' +
@@ -770,7 +929,7 @@
       navigator.clipboard.writeText(text).then(function () { toast('已複製，可以貼給行政'); }, fallback);
     } else fallback();
   }
- 
+
   function submitOrder() {
     if (S.busy) return;
     if (!isWhole(cartTotal())) return alertMsg(wholeMsg());
@@ -800,7 +959,7 @@
       alertMsg(e.message);
     });
   }
- 
+
   function cancelOrder(sessionId) {
     if (!window.confirm(S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。')) return; // 第 25 步
     setLoading('取消中…');
@@ -810,15 +969,15 @@
       return loadHome();
     }).catch(showError);
   }
- 
+
   /* ---------- 我的訂單 ---------- */
- 
+
   function openHistory() {
     setLoading('讀取訂單…');
     S.view = 'history';
     api('history').then(function (d) { if (S.view !== 'history') return; S.history = d; go('history'); }).catch(showError); // 第 38 步：讀取中按了返回就不跳
   }
- 
+
   function renderHistory() {
     var d = S.history;
     $title.textContent = d.forName ? d.forName + ' 的訂單' : '我的訂單'; // 第 20 步
@@ -840,9 +999,9 @@
     }).join('');
     $view.innerHTML = html;
   }
- 
+
   /* ---------- 第 18 步：送出後的畫面 ---------- */
- 
+
   function renderDone() {
     var d = S.done;
     var m = d.menu;
@@ -864,35 +1023,35 @@
           '<button class="btn primary" data-act="proxyOff">改回自己</button></div>'
         : '<button class="btn block" data-act="home">回首頁</button>');
   }
- 
+
   /* ---------- 第 18 步：購物車暫存（存在這支手機，只限今天） ---------- */
- 
+
   var DRAFT_KEY = 'yk_cart_v1';
- 
+
   function readStore(key) {
     try { return JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch (x) { return {}; }
   }
   function writeStore(key, obj) {
     try { localStorage.setItem(key, JSON.stringify(obj)); } catch (x) {}
   }
- 
+
   // 第 20 步：幫別人點的購物車分開存（key 前面加對方的 LineID）
   function draftKey(sessionId) { return S.forId ? S.forId + '|' + sessionId : sessionId; }
- 
+
   function readDrafts() {
     var all = readStore(DRAFT_KEY);
     var today = localToday();
     Object.keys(all).forEach(function (k) { if (!all[k] || all[k].date !== today) delete all[k]; });
     return all;
   }
- 
+
   function plainLines(lines) {
     return lines.map(function (l) {
       var item = itemOf(l.itemId);
       return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note || '', name: item ? item.name : (l.oldName || l.name || '') };
     });
   }
- 
+
   function saveCartDraft() {
     if (!S.menu || !S.menu.session.open) return;
     var all = readDrafts();
@@ -901,18 +1060,18 @@
     else delete all[id];
     writeStore(DRAFT_KEY, all);
   }
- 
+
   function clearCartDraft(sessionId) {
     var all = readDrafts();
     delete all[draftKey(sessionId)];
     writeStore(DRAFT_KEY, all);
   }
- 
+
   function draftCount(sessionId) {
     var d = readDrafts()[draftKey(sessionId)];
     return d ? d.cart.reduce(function (s, l) { return s + (Number(l.qty) || 0); }, 0) : 0;
   }
- 
+
   // 用現在的菜單檢查一行：品項還在、選項都還在、必選都選好，才算有效
   function lineValid(l) {
     var item = itemOf(l.itemId);
@@ -922,7 +1081,7 @@
     if (!(l.optionIds || []).every(function (id) { return all[id]; })) return false;
     return groupsOf(item).every(function (g) { return groupOk(g, l.optionIds || []); });
   }
- 
+
   function restoreCartDraft() {
     var d = readDrafts()[draftKey(S.menu.session.id)];
     if (!d || !S.menu.session.open) return;
@@ -932,11 +1091,11 @@
     });
     toast('已帶回上次還沒送出的購物車');
   }
- 
+
   /* ---------- 第 18 步：上次在這家點的（存在這支手機） ---------- */
- 
+
   var LAST_KEY = 'yk_last_v1';
- 
+
   function saveLastOrder(menu, lines) {
     var all = readStore(LAST_KEY);
     all[menu.store.name] = { date: menu.session.date || localToday(), lines: plainLines(lines.filter(function (l) { return !l.stale; })) };
@@ -944,12 +1103,12 @@
     keys.slice(40).forEach(function (k) { delete all[k]; }); // 最多記 40 家
     writeStore(LAST_KEY, all);
   }
- 
+
   function lastOrder() {
     var r = readStore(LAST_KEY)[S.menu.store.name];
     return r && r.lines && r.lines.length ? r : null;
   }
- 
+
   function lastOrderHtml() {
     var r = lastOrder();
     if (!r) return '';
@@ -961,7 +1120,7 @@
       }).join('、') + '</p>' +
       '<div class="btn-row"><button class="btn" data-act="reorder">一鍵加入購物車</button></div></div>';
   }
- 
+
   function addLastOrder() {
     var r = lastOrder();
     if (!r) return;
@@ -975,9 +1134,9 @@
     toast('已加入 ' + ok + ' 項' + (bad ? '，有 ' + bad + ' 項菜單已變動沒有加入' : '') + '，價格以今天菜單為準');
     render();
   }
- 
+
   /* ---------- 第 18 步：菜單搜尋、分類自動標示 ---------- */
- 
+
   function applySearch(q) {
     S.search = q;
     var words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -995,12 +1154,12 @@
     if (cb) cb.hidden = !words.length;
     spyCategory();
   }
- 
+
   function stickyBottom() {
     var el = document.getElementById('menuTools');
     return 52 + (S.forId ? 40 : 0) + (el ? el.offsetHeight : 0); // 第 20 步：黃色提示 40px
   }
- 
+
   function spyCategory() {
     if (S.view !== 'menu' || Date.now() < (S.spyPause || 0)) return;
     var titles = [].filter.call($view.querySelectorAll('.cat-title'), function (t) { return !t.hidden; });
@@ -1015,26 +1174,26 @@
     nav.querySelectorAll('.chip').forEach(function (c) { c.classList.toggle('on', c === chip); });
     nav.scrollLeft = chip.offsetLeft - nav.clientWidth / 2 + chip.offsetWidth / 2;
   }
- 
+
   var spyTick = false;
   window.addEventListener('scroll', function () {
     if (spyTick || S.view !== 'menu') return;
     spyTick = true;
     requestAnimationFrame(function () { spyTick = false; spyCategory(); });
   }, { passive: true });
- 
+
   /* ---------- 第 18 步：截止倒數 ---------- */
- 
+
   // 截止時間是台灣時間（Asia/Taipei），用 +08:00 算，手機時區設錯也不影響
   function minutesLeft(date, cutoff) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !/^\d{2}:\d{2}$/.test(cutoff || '')) return null;
     return (new Date(date + 'T' + cutoff + ':00+08:00').getTime() - Date.now()) / 60000;
   }
- 
+
   function leftText(m) { return m < 1 ? '不到 1 分鐘' : Math.ceil(m) + ' 分鐘'; }
- 
+
   var reloadedAtCutoff = {};
- 
+
   function refreshCountdown() {
     var homeEl = document.getElementById('cdHome');
     if (homeEl && S.view === 'home' && S.home) {
@@ -1070,12 +1229,12 @@
       barEl.hidden = !msg;
     }
   }
- 
+
   setInterval(refreshCountdown, 20000);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) refreshCountdown(); });
- 
+
   /* ---------- 頁面上的按鈕 ---------- */
- 
+
   $view.addEventListener('click', function (e) {
     var b = e.target.closest('[data-act]');
     if (!b || b.disabled) return;
@@ -1105,6 +1264,8 @@
       case 'home': return go('home');
       case 'reorder': return addLastOrder();
       case 'guide': return openGuide(); // 第 25 步
+      case 'vote': return openVote(); // 第 46 步
+      case 'castVote': return castVote(d.date, d.type, d.id);
       case 'clearSearch': {
         var inp = document.getElementById('menuSearch');
         inp.value = ''; applySearch(''); return;
@@ -1120,9 +1281,9 @@
       }
     }
   });
- 
+
   /* ---------- 第 20 步：行政代點 ---------- */
- 
+
   function proxyPicker() {
     var adm = S.home && S.home.admin;
     if (!adm) return '';
@@ -1133,13 +1294,13 @@
     return '<div class="card proxy-pick"><label class="field" for="forWho">幫誰點（行政）</label>' +
       '<select id="forWho">' + opts + '</select></div>';
   }
- 
+
   $view.addEventListener('change', function (e) {
     if (e.target.id !== 'forWho') return;
     var sel = e.target;
     setProxy(sel.value, sel.value ? sel.options[sel.selectedIndex].text.replace(/（臨時）$/, '') : '');
   });
- 
+
   function setProxy(id, name) {
     S.forId = id;
     S.forName = name;
@@ -1148,26 +1309,26 @@
     renderProxyBanner();
     loadHome(); // 重新讀這個人的首頁；背景預載的菜單也會換成這個人的
   }
- 
+
   function renderProxyBanner() {
     $proxy.hidden = !S.forId;
     document.body.classList.toggle('proxying', !!S.forId);
     $proxy.innerHTML = S.forId ? '<span>正在幫 <b>' + esc(S.forName) + '</b> 點餐</span><button class="proxy-off" data-act="proxyOff">改回自己</button>' : '';
   }
- 
+
   /* ---------- 小工具 ---------- */
- 
+
   function setLoading(msg) {
     closeSheet();
     $bottom.hidden = true;
     $view.innerHTML = '<div class="center muted">' + esc(msg) + '</div>';
   }
- 
+
   function showFatal(msg) {
     $bottom.hidden = true;
     $view.innerHTML = '<div class="card center"><p>' + esc(msg) + '</p><button class="btn" onclick="location.reload()">重新載入</button></div>';
   }
- 
+
   function showError(e) {
     if (e && e.code === 'NOT_APPROVED') return loadHome();
     if (e && (e.code === 'FOR_USER' || e.code === 'FORBIDDEN') && S.forId) { // 第 20 步
@@ -1180,9 +1341,9 @@
       '<button class="btn" data-act="reload">回首頁</button></div>';
     S.err = true; syncBack(); // 第 38 步：錯誤畫面按返回＝回首頁
   }
- 
+
   function alertMsg(msg) { window.alert(msg); }
- 
+
   var toastTimer;
   function toast(msg) {
     $toast.textContent = msg;
@@ -1190,13 +1351,12 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { $toast.hidden = true; }, 2200);
   }
- 
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
- 
+
   start();
 })();
- 

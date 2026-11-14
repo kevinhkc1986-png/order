@@ -12,7 +12,7 @@
   --danger: #c62828;
   --radius: 12px;
 }
- 
+
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -23,7 +23,7 @@ body {
 }
 button { font: inherit; color: inherit; cursor: pointer; }
 [hidden] { display: none !important; }
- 
+
 .topbar {
   position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 8px;
@@ -33,12 +33,12 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .topbar h1 { flex: 1; margin: 0; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .icon-btn { border: 0; background: none; font-size: 30px; line-height: 1; padding: 0 6px 4px; }
 .link-btn { border: 0; background: none; color: var(--brand); font-weight: 600; padding: 6px; }
- 
+
 main { max-width: 640px; margin: 0 auto; padding: 16px; }
 .center { text-align: center; padding: 48px 8px; }
 .muted { color: var(--muted); }
 .small { font-size: 14px; }
- 
+
 .card {
   background: var(--card); border-radius: var(--radius);
   padding: 16px; margin-bottom: 12px;
@@ -54,7 +54,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 .tag.open { background: var(--brand-soft); color: var(--brand); }
 .tag.warn { background: var(--warn-soft); color: var(--warn); }
 .tag.type { background: #eef2ff; color: #3949ab; }
- 
+
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: 44px; padding: 0 18px; border-radius: 10px;
@@ -66,13 +66,13 @@ main { max-width: 640px; margin: 0 auto; padding: 16px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn-row { display: flex; gap: 8px; margin-top: 12px; }
 .btn-row .btn { flex: 1; }
- 
+
 input[type=text], textarea {
   width: 100%; font: inherit; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 10px; background: #fff;
 }
 label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
- 
+
 /* 菜單 */
 .store-info { margin-bottom: 8px; }
 .cats {
@@ -100,7 +100,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
   display: inline-block; min-width: 22px; margin-left: 6px; padding: 0 6px;
   border-radius: 999px; background: var(--brand); color: #fff; font-size: 13px; text-align: center;
 }
- 
+
 /* 底部列 */
 .bottom-bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 6;
@@ -110,7 +110,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .bottom-bar .inner { max-width: 640px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
 .bottom-bar .sum { flex: 1; }
 .bottom-bar .sum b { font-size: 20px; }
- 
+
 /* 選項視窗 */
 .sheet-wrap { position: fixed; inset: 0; z-index: 10; }
 .sheet-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .4); }
@@ -135,7 +135,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .qty { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; }
 .qty button { width: 42px; height: 40px; border: 0; background: none; font-size: 20px; }
 .qty span { min-width: 32px; text-align: center; font-weight: 600; }
- 
+
 /* 購物車、確認 */
 .line { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .line:last-child { border-bottom: 0; }
@@ -144,13 +144,13 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 .line.stale { background: var(--warn-soft); margin: 0 -16px; padding: 12px 16px; }
 .total-row { display: flex; justify-content: space-between; font-size: 18px; font-weight: 700; padding-top: 12px; }
 .notice { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; font-size: 15px; }
- 
+
 .toast {
   position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   z-index: 20; max-width: 90vw;
   background: rgba(31, 35, 40, .92); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 15px;
 }
- 
+
 /* ---------- 第 18 步 ---------- */
 /* 搜尋框＋分類列一起固定在頂端 */
 .menu-tools {
@@ -169,7 +169,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
   position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
   width: 36px; height: 36px; border: 0; background: none; font-size: 22px; color: var(--muted);
 }
- 
+
 /* 截止倒數 */
 .cd-banner {
   position: sticky; top: 60px; z-index: 3;
@@ -182,10 +182,10 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
   border-radius: 0 0 10px 10px;
 }
 .cart-pending { color: var(--warn); font-weight: 600; margin: 4px 0 0; }
- 
+
 /* 上次在這家點的 */
 .card.reorder { border-color: #c7d2fe; background: #f5f7ff; }
- 
+
 /* 送出後的畫面 */
 .done-mark {
   width: 56px; height: 56px; margin: 4px auto 8px; border-radius: 50%;
@@ -193,7 +193,7 @@ label.field { display: block; margin: 12px 0 6px; font-weight: 600; }
 }
 .center-text { text-align: center; }
 .card.done h2 { margin-bottom: 2px; }
- 
+
 /* ===== 第 20 步：行政代點 ===== */
 .proxy-banner { position: sticky; top: 52px; z-index: 5; height: 40px; box-sizing: border-box;
   background: #fff4cc; color: #7a5200; border-bottom: 1px solid #f2c94c;
@@ -205,7 +205,7 @@ body.proxying .cd-banner { top: 100px; }
 .proxy-off { border: 1px solid #c99a00; background: #fff; color: #7a5200; border-radius: 14px; padding: 3px 10px; font-size: 13px; }
 .proxy-pick { background: #fffbea; border-color: #f2c94c; }
 .proxy-pick select { width: 100%; padding: 8px; font-size: 15px; border: 1px solid #ccc; border-radius: 8px; background: #fff; }
- 
+
 /* ===== 第 25 步：首次使用導覽、改單提示 ===== */
 .guide-wrap { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .guide {
@@ -221,7 +221,7 @@ body.proxying .cd-banner { top: 100px; }
 .guide-link { margin: 4px 0 0; }
 .edit-hint { color: var(--brand); margin: 6px 0 0; }
 .edit-hint.muted { color: var(--muted); }
- 
+
 /* 第 31 步：讓同仁記得按送出 */
 .notice.unsent { font-weight: 600; font-size: 16px; border: 1px solid #f5c26b; }
 .btn.send-big { flex: 1; width: 100%; min-height: 54px; font-size: 18px; font-weight: 700; }
@@ -229,7 +229,7 @@ body.proxying .cd-banner { top: 100px; }
   color: var(--danger); background: #fdecea; border: 2px solid var(--danger);
   border-radius: 10px; padding: 8px 12px; margin: 8px 0 0; font-size: 15px; font-weight: 600;
 }
- 
+
 /* ===== 第 40 步：點餐頁小改善 ===== */
 /* 品項視窗：加入按鈕固定在視窗底部（選項很多也不用捲到最下面） */
 .sheet { padding-bottom: 0; }
@@ -247,4 +247,25 @@ body.proxying .cd-banner { top: 100px; }
   font-size: 14px; line-height: 22px; border: 1px solid #ccc; border-radius: 8px; background: #fff; resize: none;
 }
 .copy-box[hidden] { display: none; }
- 
+
+/* 第 46 步：投票（首頁候選店卡片、投票頁） */
+.vote-card h3 { margin-bottom: 6px; }
+.vote-row { margin-top: 6px; line-height: 1.7; }
+.vote-row .tag { margin-right: 6px; }
+.vote-mine { color: var(--brand); font-size: 13px; margin-left: 6px; white-space: nowrap; }
+.vote-hint { margin: 6px 0 0; }
+.vote-more { text-align: right; }
+.vote-day { margin: 16px 0 0; font-size: 16px; }
+.vote-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.vote-opt { position: relative; overflow: hidden; display: flex; align-items: center; gap: 8px; width: 100%;
+  margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff;
+  font-size: 16px; color: var(--text); text-align: left; }
+.vote-opt:disabled { opacity: .6; }
+.vote-opt.me { border: 2px solid var(--brand); padding: 11px; }
+.vote-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--brand-soft); z-index: 0; }
+.vote-dot, .vote-name, .vote-n { position: relative; z-index: 1; }
+.vote-dot { flex: none; width: 16px; height: 16px; border: 2px solid #aaa; border-radius: 50%; box-sizing: border-box; }
+.vote-opt.me .vote-dot { border-color: var(--brand); background: radial-gradient(var(--brand) 40%, #fff 46%); }
+.vote-opt.me .vote-name { color: var(--brand); font-weight: 700; }
+.vote-name { flex: 1; }
+.vote-n { color: var(--muted); font-size: 14px; }
