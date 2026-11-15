@@ -2284,6 +2284,13 @@
     return t;
   }
 
+  // 修正 2（使用者 11-15：有選項卻只寫到備註，行政收款會少收加料的錢）：沒對上選項的字，
+  // 只有「不要／少／去／分開…」這種不會加錢的才直接當備註；其他（荷包蛋、加起司、大份…）都要同仁自己看過選項
+  function saySafeNote(w) {
+    if (/^加$|^[要再請幫我]+$/.test(w)) return true;
+    return /^(不|免|去|少|別|無|微|小)/.test(w) || /分開|分裝|另外裝|打包|切|熱一點|燙一點|軟一點|硬一點|冷的|溫的|謝謝|麻煩/.test(w);
+  }
+
   // 一樣東西（品項已決定）→ 一列結果
   function sayLine(m, item, seg, extra) {
     var groups = mGroups(m, item);
@@ -2308,6 +2315,10 @@
         var tw = sayTopWord(w, topNames);
         flags.push(topG.length ? '加料沒有「' + tw + '」（這杯可以加：' + topG.map(function (g) { return g.options.map(function (o) { return o.name; }).join('、'); }).join('、') + '），請自己選'
           : '「' + item.name + '」不能加「' + tw + '」');
+      }
+      else if (w.length >= 2 && !saySafeNote(w)) { // 修正 2：可能要加錢的字（行政照單收款會少收）→ 先寫進備註，但要同仁按「自己選」看過選項
+        note.push(w);
+        flags.push('「' + w + '」沒對上「' + item.name + '」的選項，可能要加錢，請按「自己選」看一下（已先寫在備註）');
       }
       else if (w.length >= 2 || /^[辣酸甜鹹]$/.test(w)) note.push(w);
     });
@@ -2356,10 +2367,37 @@
     return list.map(function (s) { return knownMenu(s.id); }).filter(function (d) { return d && d.session && d.session.open; });
   }
 
+  // 修正 2：前一樣東西的選項名稱裡剛好有別的品名（例如得正「紅茶加焙烏龍茶凍」裡的「焙烏龍」），
+  // 或同一個品項被拆成前後兩段，就不當成另一杯
+  function sayKeepSpans(m, c, spans) {
+    var out = [];
+    spans.forEach(function (sp) {
+      var prev = out[out.length - 1];
+      if (prev && prev.items.length === 1) {
+        var gap = c.slice(prev.end, sp.start);
+        if (sp.items.length === 1 && sp.items[0] === prev.items[0] && !sayLeft(gap)) { prev.end = sp.end; return; }
+        var inOpt = mGroups(m, prev.items[0]).some(function (g) {
+          return g.options.some(function (o) {
+            var b = sayBase(o.name), from = prev.end, at;
+            if (b.length <= sp.end - sp.start) return false;
+            while ((at = c.indexOf(b, from)) >= 0) {
+              if (at <= sp.start && at + b.length >= sp.end) return true;
+              from = at + 1;
+            }
+            return false;
+          });
+        });
+        if (inOpt) return;
+      }
+      out.push(sp);
+    });
+    return out;
+  }
+
   // 整句 → 結果列表
   function sayParse(text) {
     var m = S.menu, rows = [];
-    var src = sayNorm(text);
+    var src = sayNorm(text).replace(/[·・]/g, ''); // 修正 2：「台茶十八號·紅玉」照完整品名比，不拆成兩杯
     SAY_ITEM_ALIAS.forEach(function (a) { src = src.split(a[0]).join(a[1]); });
     var clauses = src.split(/[，,、。；;！!？?\n]+|然後|還有|另外/).filter(function (c) { return sayLeft(c); });
     var others = sayOtherMenus();
@@ -2370,6 +2408,7 @@
       if (!spans.length) { // 這家找不到，看看是不是今天另一家店的
         others.some(function (om) { var sp = sayFindItems(om, c); if (sp.length) { spans = sp; menuOf = om; } return sp.length > 0; });
       }
+      spans = sayKeepSpans(menuOf, c, spans);
       if (!spans.length) {
         var fz = sayFuzzy(m, c);
         if (!fz) others.some(function (om) { fz = sayFuzzy(om, c); return !!fz; });
