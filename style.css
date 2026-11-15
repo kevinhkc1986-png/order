@@ -330,3 +330,22 @@ body.proxying .cd-banner { top: 100px; }
 .pick-foot .btn { white-space: nowrap; padding: 0 10px; }
 .pick-fold .pick-q { white-space: nowrap; }
 .pick-fold .pick-more { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* 第 61 步：一句話點餐 */
+.card.say { border-color: #9fd8bb; background: #f6fcf9; padding: 14px; }
+.say-in { display: flex; gap: 8px; margin-top: 8px; }
+.say-in input { flex: 1; min-width: 0; margin: 0; }
+.say-in .btn { flex: none; white-space: nowrap; padding: 0 14px; }
+.say-rows { margin-top: 10px; }
+.say-row { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; font-size: 15px; }
+.say-row.ok { border-color: #9fd8bb; }
+.say-row.need { border-color: #f5c26b; background: #fffaf0; }
+.say-row.pick { border-color: #f2c94c; background: #fffdf3; }
+.say-row.pick .opts { margin-top: 6px; }
+.say-row.bad { border-color: #f0b4b4; background: #fff6f6; color: var(--danger); }
+.say-row .btn-row { margin-top: 6px; }
+.say-opts { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 2px; font-size: 14px; }
+.say-opt.def { color: var(--muted); }
+.say-opt.def small { margin-left: 3px; padding: 0 5px; border-radius: 6px; background: var(--line); color: var(--muted); font-size: 11px; }
+.say-flag { margin-top: 4px; font-size: 14px; color: var(--warn); font-weight: 600; }
+.btn-row .btn.say-take { flex: 2; }

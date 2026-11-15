@@ -78,6 +78,10 @@
  *   - 紅隊審查（11-14）：收起時露出第 1 名「大家最常點：○○ ›」；幫我選只顯示這家店有的類別；
  *     「加入」後提示寫出帶了哪些選項。
  *
+ * 第 61 步（一句話點餐，不接 AI）：菜單上方「💬 一句話點餐」輸入框（截止前、改單時都有），按「幫我填」在手機上比對這家（和今天另一家）菜單的
+ *   品名、選項、數量，結果列在卡片上：✅ 對上了／⚠️ 要自己選／❓ 有幾個像的點一個／✖️ 對不上請用菜單點，沒說的選項標「預設」。
+ *   按「放進購物車」才加進去（購物車本來就從目前的單開始，不會蓋掉），照舊在購物車按送出。甜度：半糖＝五分、微糖＝三分，少糖、全糖不猜。
+ *
  * 第 58 步（紅隊 6、7、11）：
  *   - 取消已付款（或改單前付過）的單時，確認框多一句「已付款 $N：截止前重新點會自動抵用；不點了請找行政退錢」。
  *   - 首頁：這團取消了自己的已付款單、還沒重新點時，卡片多一行「取消的單已付 $N…」（後端 spare）。
@@ -1203,6 +1207,7 @@
     S.search = '';
     S.lateFail = false; // 第 40 步
     S.pickOpen = false; // 第 50 步：每次進菜單都先收起
+    S.say = { text: '', rows: [] }; // 第 61 步：一句話點餐每次進菜單都清空
     restoreCartDraft(); // 第 18 步
     go('menu');
   }
@@ -1215,7 +1220,7 @@
     var untouched = !cartChanged();
     S.menu = d;
     if (untouched) { S.cart = cartFromOrder(d); S.cartStart = JSON.stringify(S.cart); }
-    var typing = document.activeElement && document.activeElement.id === 'menuSearch';
+    var typing = document.activeElement && (document.activeElement.id === 'menuSearch' || document.activeElement.id === 'sayText'); // 第 61 步
     if (!$sheet.hidden || typing || S.busy) return;
     var y = window.scrollY;
     render();
@@ -1255,6 +1260,7 @@
     if (m.session.late) head += '<div class="notice">這一團已經截止，你是行政，可以幫忙補單或改單。</div>';
     // 第 49 步修正 2：看得到意見回饋的人，菜單頁多一個「回報這家菜單」（自動帶店名、類型菜單錯誤）
     if (S.home && S.home.fb && !S.forId) head += '<p class="fb-menu-link"><button class="link-btn" data-act="fbMenu">回報這家菜單有錯</button></p>';
+    if (m.session.open) head += sayCardHtml(); // 第 61 步：一句話點餐（改單時也有，「再加一杯」從目前的單開始）
     if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示；第 50 步：移到最上面，常客最快）
     if (m.session.open && !S.cart.length) head += pickCardHtml(); // 第 50 步：不知道吃什麼？（預設收起）
 
@@ -1285,6 +1291,11 @@
 
     $view.innerHTML = head + tools + body + '<p class="center muted" id="noMatch" hidden>找不到符合的品項</p>';
     document.getElementById('menuSearch').addEventListener('input', function (e) { applySearch(e.target.value); });
+    var sayEl = document.getElementById('sayText'); // 第 61 步：打的字記著（重畫不會不見），按 Enter／前往＝幫我填
+    if (sayEl) {
+      sayEl.addEventListener('input', function (e) { S.say.text = e.target.value; });
+      sayEl.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayGo(); } });
+    }
     if (S.search) applySearch(S.search); else spyCategory(); // 重畫後（例如加入購物車）分類標示跟著目前位置
     if (m.session.open) showCartBar('查看購物車', function () { go('cart'); }, !S.cart.length);
   }
@@ -1353,6 +1364,7 @@
       });
     }
     draft = { itemId: itemId, optionIds: ids, qty: base ? base.qty : 1, note: base ? base.note : '', index: index, tried: false };
+    S.sayFixing = null; // 第 61 步：一句話點餐的「自己選」打開後才設定
     draft.start = draftSig(); // 第 40 步：記下打開時的樣子，關掉時比對有沒有改
     S.sheetMode = 'item'; // 第 50 步：同一個視窗也拿來放「幫我選」
     renderSheet();
@@ -1417,6 +1429,8 @@
       if (badG) { draft.tried = true; renderSheet(); return toast('「' + badG.name + '」還沒選好（' + ruleText(badG) + '）'); }
       var line = { itemId: draft.itemId, optionIds: draft.optionIds.slice(), qty: draft.qty, note: draft.note.trim(), stale: false };
       if (draft.index != null) S.cart[draft.index] = line; else S.cart.push(line);
+      if (S.sayFixing != null && draft.index == null && S.say && S.say.rows[S.sayFixing]) S.say.rows.splice(S.sayFixing, 1); // 第 61 步：自己選好的那列拿掉
+      S.sayFixing = null;
       closeSheet();
       toast(draft.index != null ? '已更新' : '已加入購物車');
       return render();
@@ -2046,6 +2060,479 @@
     renderPick();
   });
 
+  /* ---------- 第 61 步：一句話點餐（在手機上比對今天的菜單，不接 AI、不送到外面） ----------
+     同仁打一句話（或用手機鍵盤的麥克風說），按「幫我填」：
+       - 一句可以有好幾樣，用逗號、頓號、空白或直接連著寫都可以（例如「大杯珍奶三分微冰、雞腿便當飯少」）。
+       - 每一樣分成：對上了（放進購物車）、要自己選（缺選項或這家沒有那個甜度冰量）、有幾個像的（點一個）、對不上（請用下面的菜單點）。
+       - 沒說的選項用菜單的預設值，卡片上標「預設」。
+       - 購物車本來就從「目前的單」開始，所以「再加一杯」只會加在後面，不會把原本的蓋掉；「○○改去冰」「○○不要了」改的是購物車那一行。
+       - 另一家店的品項（例如在飲料店說了便當）放進那家店的購物車暫存，回首頁按那家「繼續點餐」送出。
+       - 甜度對照（使用者 11-15 決定）：半糖＝五分、微糖＝三分；少糖、全糖這家沒有就不猜，請同仁自己選。
+     放進購物車後照舊在購物車按「送出」，後端一樣檢查截止、售完、選項規則。 */
+
+  var SAY_UNIT = '杯|份|個|碗|盒|顆|粒|瓶|罐|盤|條|片|串|包|客|隻|支|碟';
+  var SAY_NUM = { '一': 1, '二': 2, '兩': 2, '倆': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10 };
+  var SAY_DIGIT = '零一二三四五六七八九';
+  // 這家店有這個選項名才換（沒有就交給後面的「這家沒有，請自己選」）
+  var SAY_OPT_ALIAS = [
+    ['半糖', ['五分']], ['微糖', ['三分']], ['不要糖', ['無糖']], ['不加糖', ['無糖']], ['零分糖', ['無糖']], ['零分', ['無糖']],
+    ['不要冰', ['去冰']], ['不加冰', ['去冰']], ['冰塊去掉', ['去冰']], ['冰少', ['少冰']],
+    ['熱的', ['熱飲']], ['溫的', ['溫飲']], ['熱', ['熱飲']], ['溫', ['溫飲']],
+    ['特大杯', ['xl']], ['大杯', ['l', 'xl']], ['中杯', ['m']], ['小杯', ['s', 'm']],
+    ['飯少', ['半飯']], ['少飯', ['半飯']], ['飯半', ['半飯']], ['飯多', ['加飯']], ['多飯', ['加飯']],
+    ['大碗', ['大']], ['小碗', ['小']], ['大份', ['大']], ['小份', ['小']]
+  ];
+  // 品名的口語說法（先換成全名再比對）
+  var SAY_ITEM_ALIAS = [['珍奶', '珍珠奶茶'], ['波奶', '波霸奶茶'], ['珍綠', '珍珠奶綠'], ['波綠', '波霸奶綠']];
+  // 說了甜度、冰量，但這家沒有這個選項 → 不猜，請同仁自己選
+  var SAY_SWEET_RE = /(無|零|一|二|兩|三|四|五|六|七|八|九|十|半|微|少|全|正常|多)分?糖|[一二兩三四五六七八九十]分/;
+  var SAY_ICE_RE = /(完全去|去|微微|微|一點點|少|半|正常|多)冰|熱飲|溫飲|常溫|熱的|溫的|冰的/;
+  var SAY_LAST_RE = /跟上次一樣|和上次一樣|同上次|上次那樣|上次點的|照上次/;
+  var SAY_DEL_RE = /刪掉|刪除|拿掉|取消|不要了|不用了/;
+  var SAY_MOD_RE = /改成|改為|換成|改/;
+  var SAY_FILL_RE = /我想要|我要|想要|幫我|給我|麻煩|謝謝|謝啦|再加|再來|追加|加點|還要|也要|然後|另外|一下|好了|就好|改成|改為|換成|刪掉|刪除|拿掉|取消|不用了|請|再|要|來|點|改|喔|哦|啊|呀|吧|囉|啦|的|了|和|跟|與|及|也/g;
+
+  // 統一寫法：全形英數換半形、小寫、拿掉空白；「3分」換成「三分」
+  function sayNorm(s) {
+    return String(s || '').replace(/[！-～]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 0xFEE0); })
+      .toLowerCase().replace(/[\s　]+/g, '')
+      .replace(/(\d)(?=分)/g, function (d) { return SAY_DIGIT.charAt(+d); });
+  }
+  // 品名、選項名拿掉括號裡的說明（例如「水餃（10顆）」→「水餃」）
+  function sayBase(name) {
+    var b = sayNorm(String(name || '').replace(/[（(][^）)]*[）)]/g, ''));
+    return b || sayNorm(name);
+  }
+  function sayChineseNum(n) {
+    if (n < 10) return SAY_DIGIT.charAt(n);
+    if (n < 100) return (n >= 20 ? SAY_DIGIT.charAt(Math.floor(n / 10)) : '') + '十' + (n % 10 ? SAY_DIGIT.charAt(n % 10) : '');
+    return String(n);
+  }
+  function sayNumber(s) {
+    if (/^\d+$/.test(s)) return +s;
+    var m = /^([一二兩三四五六七八九])?十([一二三四五六七八九])?$/.exec(s);
+    if (m) return (m[1] ? SAY_NUM[m[1]] : 1) * 10 + (m[2] ? SAY_NUM[m[2]] : 0);
+    return SAY_NUM[s] || 0;
+  }
+
+  // 用某一家店的菜單（不一定是現在打開的那家）
+  function mItem(m, id) { return m.items.filter(function (i) { return i.id === id; })[0]; }
+  function mGroups(m, item) { return item.groupIds.map(function (g) { return m.groups[g]; }).filter(Boolean); }
+  function mValid(m, l) {
+    var item = mItem(m, l.itemId);
+    if (!item) return false;
+    return mGroups(m, item).every(function (g) {
+      var n = g.options.filter(function (o) { return l.optionIds.indexOf(o.id) >= 0; }).length;
+      return n >= g.min && n <= g.max;
+    });
+  }
+  function mPrice(m, l) {
+    var item = mItem(m, l.itemId);
+    if (!item) return 0;
+    var add = 0;
+    mGroups(m, item).forEach(function (g) { g.options.forEach(function (o) { if (l.optionIds.indexOf(o.id) >= 0) add += o.price; }); });
+    return (item.price + add) * l.qty;
+  }
+  function defaultIdsOf(m, item) {
+    var ids = [];
+    mGroups(m, item).forEach(function (g) {
+      g.options.filter(function (o) { return o.def; }).slice(0, g.max).forEach(function (o) { ids.push(o.id); });
+    });
+    return ids;
+  }
+  // 這一列是不是現在打開的這家（菜單背景更新後物件會換，所以比 SessionID）
+  function sayHere(r) { return !!(S.menu && r.m && r.m.session.id === S.menu.session.id); }
+
+  // 一家店的品名比對表：{ key, item, strong }；品名結尾「飯」也接受「便當」，反過來也是
+  function sayItemKeys(m) {
+    if (m._sayKeys) return m._sayKeys;
+    var keys = [];
+    var add = function (k, item, strong, sold) { if (k && k.length >= 2) keys.push({ key: k, item: item, strong: strong, sold: !!sold }); };
+    var addAll = function (item, sold) {
+      var full = sayBase(item.name).replace(/[·・]/g, '');
+      add(full, item, true, sold);
+      if (/飯$/.test(full)) add(full.slice(0, -1) + '便當', item, true, sold);
+      if (/便當$/.test(full)) add(full.slice(0, -2) + '飯', item, true, sold);
+      var parts = sayBase(item.name).split(/[\/／·・]/);
+      if (parts.length > 1) parts.forEach(function (p) { add(p, item, false, sold); });
+    };
+    m.items.forEach(function (i) { addAll(i, false); });
+    (m.soldOut || []).forEach(function (i) { addAll(i, true); });
+    keys.sort(function (a, b) { return b.key.length - a.key.length || (b.strong - a.strong); });
+    try { Object.defineProperty(m, '_sayKeys', { value: keys, enumerable: false, configurable: true }); } catch (x) {}
+    return keys;
+  }
+
+  // 在一段字裡找品名，回傳不重疊的位置 [{ start, end, items:[...], sold }]（長的先找）
+  function sayFindItems(m, text) {
+    var spans = [];
+    var free = function (s, e) { return spans.every(function (t) { return e <= t.start || s >= t.end; }); };
+    sayItemKeys(m).forEach(function (k) {
+      var from = 0, at;
+      while ((at = text.indexOf(k.key, from)) >= 0) {
+        var end = at + k.key.length;
+        var same = spans.filter(function (sp) { return sp.start === at && sp.end === end; })[0];
+        if (same) {
+          // 同一段字對到好幾個品項（例如兩家分類都有同名）→ 列出來讓同仁點
+          if (same.strong === k.strong && same.items.indexOf(k.item) < 0) same.items.push(k.item);
+        } else if (free(at, end)) {
+          spans.push({ start: at, end: end, items: [k.item], strong: k.strong, sold: k.sold });
+        }
+        from = at + 1;
+      }
+    });
+    return spans.sort(function (a, b) { return a.start - b.start; });
+  }
+
+  // 一段字裡的選項：長的先比，比到的字拿掉；回傳 { ids, said:{GroupID:true}, rest }
+  function sayOptions(m, item, text) {
+    var groups = mGroups(m, item);
+    var cand = [];
+    groups.forEach(function (g) {
+      g.options.forEach(function (o) {
+        var b = sayBase(o.name);
+        var ks = [b];
+        if (/^[零一二兩三四五六七八九十]分$/.test(b)) ks.push(b + '糖');
+        if (b === '二分' || b === '二分糖') ks.push('兩分', '兩分糖', '二分', '二分糖');
+        var nk = /^(\d+)(顆|個|粒|片)$/.exec(b); // 「20顆」也接受「二十顆」
+        if (nk) ks.push(sayChineseNum(+nk[1]) + nk[2]);
+        ks.forEach(function (k) { if (k) cand.push({ key: k, g: g, o: o }); });
+      });
+    });
+    SAY_OPT_ALIAS.forEach(function (a) {
+      var hit = null;
+      a[1].some(function (want) {
+        groups.some(function (g) {
+          var o = g.options.filter(function (x) { return sayBase(x.name) === want; })[0];
+          if (o) hit = { key: a[0], g: g, o: o };
+          return !!o;
+        });
+        return !!hit;
+      });
+      if (hit) cand.push(hit);
+    });
+    cand.sort(function (a, b) { return b.key.length - a.key.length; });
+    var ids = defaultIdsOf(m, item), said = {};
+    var rest = text;
+    cand.forEach(function (c) {
+      var at = rest.indexOf(c.key);
+      if (at < 0) return;
+      rest = rest.slice(0, at) + '\u0001' + rest.slice(at + c.key.length); // 拿掉比到的字（留記號，免得前後字黏成別的詞）
+      var g = c.g;
+      var inG = function (id) { return g.options.some(function (x) { return x.id === id; }); };
+      if (g.single || g.max === 1) {
+        ids = ids.filter(function (id) { return !inG(id); });
+        ids.push(c.o.id);
+      } else {
+        if (!said[g.id]) ids = ids.filter(function (id) { return !inG(id); }); // 第一次說到這個多選群組：先拿掉預設的
+        var n = ids.filter(inG).length;
+        if (ids.indexOf(c.o.id) < 0 && n < g.max) ids.push(c.o.id);
+      }
+      said[g.id] = true;
+    });
+    return { ids: ids, said: said, rest: rest };
+  }
+
+  // 數量：「兩杯」「2份」「x2」「×3」，或單獨的數字；回傳 { qty, rest }
+  function sayQty(text) {
+    var qty = 0, rest = text, mm;
+    mm = new RegExp('(\\d+|[一二兩倆三四五六七八九十]+)(' + SAY_UNIT + ')').exec(rest);
+    if (mm) { qty = sayNumber(mm[1]); rest = rest.replace(mm[0], '\u0001'); }
+    if (!qty) { mm = /[x×*＊](\d+)/.exec(rest); if (mm) { qty = +mm[1]; rest = rest.replace(mm[0], '\u0001'); } }
+    if (!qty) { mm = /(\d+)/.exec(rest); if (mm) { qty = +mm[1]; rest = rest.replace(mm[0], '\u0001'); } }
+    return { qty: qty, rest: rest };
+  }
+
+  // 剩下的字：拿掉口語助詞（「不要○○」保留，那是備註）
+  function sayLeft(text) {
+    return String(text).replace(/不要/g, '\u0002').replace(SAY_FILL_RE, ' ').replace(/\u0002/g, '不要')
+      .replace(/[^一-鿿a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  // 一樣東西（品項已決定）→ 一列結果
+  function sayLine(m, item, seg, extra) {
+    var groups = mGroups(m, item);
+    var op = sayOptions(m, item, seg);
+    var q = sayQty(op.rest);
+    var qty = q.qty || 1;
+    var flags = [], note = [];
+    if (qty > MAX_QTY) { flags.push('一行最多 ' + MAX_QTY + ' 份'); qty = MAX_QTY; }
+    sayLeft(q.rest).split(' ').forEach(function (w) {
+      if (!w) return;
+      var sw = SAY_SWEET_RE.exec(w), ic = SAY_ICE_RE.exec(w);
+      var hasSweet = groups.some(function (g) { return /甜/.test(g.name); });
+      var hasIce = groups.some(function (g) { return /冰|溫度/.test(g.name); });
+      if (sw && hasSweet) flags.push('甜度「' + sw[0] + '」這家沒有，請自己選');
+      else if (ic && hasIce) flags.push('冰量「' + ic[0] + '」這家沒有，請自己選');
+      else if (sw || ic) flags.push('「' + item.name + '」不能選「' + w + '」');
+      else if (w.length >= 2 || /^[辣酸甜鹹]$/.test(w)) note.push(w);
+    });
+    var line = { itemId: item.id, optionIds: op.ids, qty: qty, note: note.join(' ').slice(0, 50), stale: false };
+    if (!mValid(m, line)) {
+      var miss = groups.filter(function (g) {
+        var n = g.options.filter(function (o) { return line.optionIds.indexOf(o.id) >= 0; }).length;
+        return n < g.min || n > g.max;
+      }).map(function (g) { return '「' + g.name + '」'; });
+      flags.push('還要選' + (miss.join('、') || '選項'));
+    }
+    var row = { m: m, seg: seg, line: line, said: op.said, flags: flags };
+    Object.keys(extra || {}).forEach(function (k) { row[k] = extra[k]; });
+    row.kind = flags.length ? 'need' : 'ok';
+    return row;
+  }
+
+  // 一段字（裡面有一個品名）在某家店比對
+  function saySeg(m, seg) {
+    var sp = sayFindItems(m, seg)[0];
+    if (!sp) return null;
+    if (sp.sold) return { kind: 'bad', m: m, seg: seg, msg: '「' + sp.items[0].name + '」今天售完了' };
+    if (sp.items.length > 1) return { kind: 'pick', m: m, seg: seg, word: seg.slice(sp.start, sp.end), cands: sp.items.slice(0, 8), more: sp.items.length };
+    return sayLine(m, sp.items[0], seg.slice(0, sp.start) + '\u0001' + seg.slice(sp.end));
+  }
+
+  // 沒有完整品名時：說的字是品名的一部分（例如「烏龍」「乾麵」）
+  //   整段剛好只對到一個品項 → 對到那個（卡片上寫你說的字）；其他情況都列出來讓同仁點，不自己猜
+  function sayFuzzy(m, seg) {
+    var w = sayLeft(sayQty(seg.replace(SAY_SWEET_RE, '\u0001').replace(SAY_ICE_RE, '\u0001')).rest).replace(/ /g, '');
+    if (w.length < 2) return null;
+    var find = function (x) { return m.items.filter(function (i) { return sayBase(i.name).indexOf(x) >= 0; }); };
+    var hits = find(w);
+    if (hits.length === 1) return sayLine(m, hits[0], seg.replace(w, '\u0001'), { fuzzy: w });
+    var word = w;
+    for (var len = w.length - 1; !hits.length && len >= 2; len--) { // 整段對不到：從長到短找一小段對得到的字
+      for (var k = 0; k + len <= w.length && !hits.length; k++) { word = w.substr(k, len); hits = find(word); }
+    }
+    if (!hits.length) return null;
+    return { kind: 'pick', m: m, seg: seg, word: word, cands: hits.slice(0, 8), more: hits.length };
+  }
+
+  // 今天其他開放中、菜單已載好的店
+  function sayOtherMenus() {
+    var list = ((S.home && S.home.sessions) || []).filter(function (s) { return s.open && !s.canceled && s.id !== S.menu.session.id; });
+    return list.map(function (s) { return knownMenu(s.id); }).filter(function (d) { return d && d.session && d.session.open; });
+  }
+
+  // 整句 → 結果列表
+  function sayParse(text) {
+    var m = S.menu, rows = [];
+    var src = sayNorm(text);
+    SAY_ITEM_ALIAS.forEach(function (a) { src = src.split(a[0]).join(a[1]); });
+    var clauses = src.split(/[，,、。；;！!？?\n]+|然後|還有|另外/).filter(function (c) { return sayLeft(c); });
+    var others = sayOtherMenus();
+    clauses.forEach(function (c) {
+      if (SAY_LAST_RE.test(c)) { rows = rows.concat(sayLast()); return; }
+      var menuOf = m;
+      var spans = sayFindItems(m, c);
+      if (!spans.length) { // 這家找不到，看看是不是今天另一家店的
+        others.some(function (om) { var sp = sayFindItems(om, c); if (sp.length) { spans = sp; menuOf = om; } return sp.length > 0; });
+      }
+      if (!spans.length) {
+        var fz = sayFuzzy(m, c);
+        if (!fz) others.some(function (om) { fz = sayFuzzy(om, c); return !!fz; });
+        rows.push(fz || { kind: 'bad', m: m, seg: c, msg: '「' + sayLeft(c).replace(/ /g, '') + '」對不上今天的菜單' });
+        return;
+      }
+      // 一段裡有好幾樣：數量寫在品名前面（「兩杯珍奶一杯紅茶」）就往後歸，否則往前歸
+      var prefix = sayQty(c.slice(0, spans[0].start)).qty > 0;
+      spans.forEach(function (sp, i) {
+        var last = i === spans.length - 1;
+        var from = prefix ? (i ? spans[i - 1].end : 0) : (i ? sp.start : 0);
+        var to = prefix ? (last ? c.length : sp.end) : (last ? c.length : spans[i + 1].start);
+        var seg = c.slice(from, to);
+        var r = saySeg(menuOf, seg);
+        if (!r) return;
+        if (menuOf === m && r.line) r = sayModify(r, seg);
+        rows.push(r);
+      });
+    });
+    return rows;
+  }
+
+  // 「○○改去冰」「○○不要了」：改購物車裡那一行（購物車只能有一行這個品項，有好幾行請到購物車改）
+  function sayModify(r, seg) {
+    var del = SAY_DEL_RE.test(seg), mod = !del && SAY_MOD_RE.test(seg);
+    if (!del && !mod) return r;
+    var idx = [];
+    S.cart.forEach(function (l, i) { if (l.itemId === r.line.itemId && !l.stale) idx.push(i); });
+    var name = mItem(r.m, r.line.itemId).name;
+    if (!idx.length) return { kind: 'bad', m: r.m, seg: seg, msg: '購物車裡沒有「' + name + '」可以' + (del ? '刪' : '改') };
+    if (idx.length > 1) return { kind: 'bad', m: r.m, seg: seg, msg: '購物車有 ' + idx.length + ' 行「' + name + '」，請到購物車按' + (del ? '刪除' : '修改') };
+    var old = S.cart[idx[0]];
+    if (del) return { kind: 'del', m: r.m, seg: seg, idx: idx[0], line: old };
+    var item = mItem(r.m, old.itemId);
+    var ids = old.optionIds.slice(), changed = [];
+    mGroups(r.m, item).forEach(function (g) {
+      if (!r.said[g.id]) return;
+      ids = ids.filter(function (id) { return !g.options.some(function (o) { return o.id === id; }); });
+      g.options.forEach(function (o) { if (r.line.optionIds.indexOf(o.id) >= 0) { ids.push(o.id); changed.push(o.name); } });
+    });
+    if (!changed.length) return { kind: 'bad', m: r.m, seg: seg, msg: '聽不出「' + name + '」要改成什麼' };
+    var line = { itemId: old.itemId, optionIds: ids, qty: old.qty, note: old.note, stale: false };
+    if (!mValid(r.m, line)) return { kind: 'bad', m: r.m, seg: seg, msg: '「' + name + '」這樣改不符合選項規則' };
+    return { kind: 'mod', m: r.m, seg: seg, idx: idx[0], line: line, changed: changed };
+  }
+
+  // 「跟上次一樣」：第 18 步記在手機的「上次在這家點的」
+  function sayLast() {
+    var m = S.menu;
+    if (S.forId) return [{ kind: 'bad', m: m, seg: '', msg: '幫別人點的時候沒有「上次點的」' }];
+    var r = lastOrder();
+    if (!r) return [{ kind: 'bad', m: m, seg: '', msg: '這支手機沒有記到上次在這家點的' }];
+    return r.lines.map(function (l) {
+      var item = mItem(m, l.itemId);
+      if (!item) return { kind: 'bad', m: m, seg: '', msg: '上次的「' + l.name + '」今天菜單沒有' };
+      var line = { itemId: l.itemId, optionIds: (l.optionIds || []).slice(), qty: Math.min(MAX_QTY, Math.max(1, Number(l.qty) || 1)), note: l.note || '', stale: false };
+      if (!mValid(m, line)) {
+        line.optionIds = defaultIdsOf(m, item);
+        return { kind: 'need', m: m, seg: '', line: line, said: {}, flags: ['上次的選項今天菜單變了，請自己選'] };
+      }
+      var said = {};
+      mGroups(m, item).forEach(function (g) { said[g.id] = true; });
+      return { kind: 'ok', m: m, seg: '', line: line, said: said, flags: [], last: true };
+    });
+  }
+
+  function sayGo() {
+    var el = document.getElementById('sayText');
+    var text = el ? el.value : '';
+    S.say = { text: text, rows: [] };
+    if (!sayLeft(sayNorm(text))) { toast('先打一句想點的，例如：珍奶半糖去冰'); return render(); }
+    S.say.rows = sayParse(text);
+    if (!S.say.rows.length) S.say.rows = [{ kind: 'bad', m: S.menu, seg: text, msg: '聽不出要點什麼' }];
+    if (el) el.blur(); // 收起鍵盤，看得到結果
+    render();
+    var card = document.getElementById('sayCard');
+    if (card) { // 捲到卡片頂端（扣掉固定在上面的標題列）
+      var bar = document.querySelector('.topbar');
+      window.scrollTo(0, Math.max(0, card.getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 8));
+    }
+  }
+
+  // 卡片上的選項：自己說的照常寫，沒說的標「預設」
+  function sayOptHtml(r) {
+    var item = mItem(r.m, r.line.itemId);
+    return mGroups(r.m, item).map(function (g) {
+      var picked = g.options.filter(function (o) { return r.line.optionIds.indexOf(o.id) >= 0; });
+      if (!picked.length) return '';
+      var t = esc(picked.map(function (o) { return o.name + (o.price ? '(+' + o.price + ')' : ''); }).join('、'));
+      return r.said && r.said[g.id] ? '<span class="say-opt">' + t + '</span>' : '<span class="say-opt def">' + t + '<small>預設</small></span>';
+    }).join('');
+  }
+
+  function sayStoreTag(r) {
+    return sayHere(r) ? '' : '<span class="tag warn">放到「' + esc(r.m.store.name) + '」</span> ';
+  }
+
+  function sayRowHtml(r, i) {
+    if (r.kind === 'ok' || r.kind === 'need') {
+      var item = mItem(r.m, r.line.itemId);
+      return '<div class="say-row ' + r.kind + '"><div class="row"><b>' + (r.kind === 'ok' ? '✅ ' : '⚠️ ') + sayStoreTag(r) + esc(item.name) + ' × ' + r.line.qty + '</b>' +
+        '<b>$' + mPrice(r.m, r.line) + '</b></div>' +
+        (r.fuzzy ? '<div class="small muted">你說「' + esc(r.fuzzy) + '」，對到這個</div>' : '') +
+        (r.last ? '<div class="small muted">跟上次一樣</div>' : '') +
+        '<div class="say-opts">' + sayOptHtml(r) + '</div>' +
+        (r.line.note ? '<div class="small">備註：' + esc(r.line.note) + ' <span class="muted">（照寫給店家）</span></div>' : '') +
+        (r.flags.length ? '<div class="say-flag">' + r.flags.map(esc).join('<br>') + '</div>' : '') +
+        (r.kind === 'need' ? (sayHere(r) ? '<div class="btn-row"><button class="btn" data-act="sayFix" data-i="' + i + '">自己選</button></div>'
+          : '<div class="small muted">請到「' + esc(r.m.store.name) + '」用菜單點</div>') : '') + '</div>';
+    }
+    if (r.kind === 'mod' || r.kind === 'del') {
+      var it = mItem(r.m, r.line.itemId);
+      return '<div class="say-row ok"><div class="row"><b>' + (r.kind === 'mod' ? '✏️ 改 ' : '🗑️ 刪掉 ') + esc(it ? it.name : '') + ' × ' + r.line.qty + '</b>' +
+        (r.kind === 'mod' ? '<b>$' + mPrice(r.m, r.line) + '</b>' : '') + '</div>' +
+        (r.kind === 'mod' ? '<div class="small">改成：' + esc(r.changed.join('、')) + '</div>' : '<div class="small muted">購物車裡的這一行會拿掉</div>') + '</div>';
+    }
+    if (r.kind === 'pick') {
+      var total = Math.max(r.more || 0, r.cands.length);
+      return '<div class="say-row pick"><div>❓ 「' + esc(r.word) + '」有 ' + total + ' 個' + (total > r.cands.length ? '（先列 ' + r.cands.length + ' 個，沒有的請用搜尋）' : '') + '，點一個：</div>' +
+        (sayHere(r) ? '' : '<div class="small muted">是「' + esc(r.m.store.name) + '」的品項</div>') + '<div class="opts">' +
+        r.cands.map(function (c) {
+          return '<button class="opt" data-act="sayPick" data-i="' + i + '" data-id="' + esc(c.id) + '">' + esc(c.name) + '<small>$' + c.price + '</small></button>';
+        }).join('') + '</div></div>';
+    }
+    var open = ((S.home && S.home.sessions) || []).filter(function (s) { return s.open && !s.canceled; });
+    return '<div class="say-row bad">✖️ ' + esc(r.msg) + '，請改用下面的菜單點選' +
+      (/對不上/.test(r.msg) && open.length ? '<div class="small muted">今天開的是：' + open.map(function (s) { return esc(s.storeName) + '（' + esc(s.type) + '）'; }).join('、') + '</div>' : '') + '</div>';
+  }
+
+  function sayCardHtml() {
+    var say = S.say || { text: '', rows: [] };
+    var rows = say.rows || [];
+    var html = '<div class="card say" id="sayCard"><div class="row"><b>💬 一句話點餐</b>' +
+      '<span class="small muted">可按鍵盤麥克風用說的</span></div>' +
+      '<div class="say-in"><input id="sayText" type="text" maxlength="200" enterkeyhint="go" autocomplete="off" placeholder="例如：大杯珍奶三分微冰" value="' + esc(say.text) + '">' +
+      '<button class="btn primary" data-act="sayGo">幫我填</button></div>';
+    if (!rows.length) return html + '</div>';
+    var n = rows.filter(function (r) { return r.kind === 'ok' || r.kind === 'mod' || r.kind === 'del'; }).length;
+    return html + '<div class="say-rows">' + rows.map(sayRowHtml).join('') + '</div>' +
+      '<div class="btn-row"><button class="btn" data-act="sayClear">清除</button>' +
+      '<button class="btn primary say-take" data-act="sayTake"' + (n ? '' : ' disabled') + '>' + (n ? '放進購物車（' + n + ' 項）' : '沒有可以放的') + '</button></div>' +
+      '<p class="small muted" style="margin:6px 0 0">放進購物車還沒送出，要到購物車按「送出」才算點好。</p></div>';
+  }
+
+  // 另一家店的品項：放進那家店的購物車暫存（從那家目前的暫存或目前的單開始，不會蓋掉）
+  function sayToOtherDraft(m, lines) {
+    var all = readDrafts();
+    var k = draftKey(m.session.id);
+    var base = all[k] && all[k].cart ? all[k].cart : (m.myOrder ? m.myOrder.lines.map(function (l) {
+      return { itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note || '', name: l.name };
+    }) : []);
+    lines.forEach(function (l) {
+      var it = mItem(m, l.itemId);
+      base.push({ itemId: l.itemId, optionIds: l.optionIds.slice(), qty: l.qty, note: l.note || '', name: it ? it.name : '' });
+    });
+    all[k] = { date: localToday(), cart: base };
+    writeStore(DRAFT_KEY, all);
+  }
+
+  function sayTake() {
+    var rows = (S.say && S.say.rows) || [];
+    var here = 0, other = {}, dels = [];
+    rows.forEach(function (r) {
+      if (r.kind === 'ok' && sayHere(r)) { S.cart.push({ itemId: r.line.itemId, optionIds: r.line.optionIds.slice(), qty: r.line.qty, note: r.line.note, stale: false }); here++; }
+      else if (r.kind === 'ok') (other[r.m.session.id] = other[r.m.session.id] || { m: r.m, lines: [] }).lines.push(r.line);
+      else if ((r.kind === 'mod' || r.kind === 'del') && !(S.cart[r.idx] && S.cart[r.idx].itemId === r.line.itemId)) return; // 購物車已經變了就不動
+      else if (r.kind === 'mod') { S.cart[r.idx] = r.line; here++; }
+      else if (r.kind === 'del') dels.push(r.idx);
+    });
+    dels.sort(function (a, b) { return b - a; }).forEach(function (i) { S.cart.splice(i, 1); here++; });
+    var names = Object.keys(other).map(function (id) { sayToOtherDraft(other[id].m, other[id].lines); return other[id].m.store.name; });
+    var left = rows.filter(function (r) { return r.kind === 'need' || r.kind === 'pick' || r.kind === 'bad'; });
+    S.say = left.length ? { text: S.say.text, rows: left } : { text: '', rows: [] };
+    var msg = (here ? '已放進購物車' : '') + (names.length ? (here ? '；' : '') + '「' + names.join('、') + '」的放在那家購物車，回首頁按「繼續點餐」送出' : '');
+    if (left.length) { toast(msg + (msg ? '，' : '') + '還有 ' + left.length + ' 項要自己處理'); return render(); }
+    toast(msg);
+    if (here) return go('cart');
+    render();
+  }
+
+  // 要自己選的那一列：打開品項視窗，先帶入聽到的選項、數量、備註
+  function sayFix(i) {
+    var r = S.say && S.say.rows[i];
+    if (!r || !r.line || !itemOf(r.line.itemId)) return;
+    openItem(r.line.itemId, null);
+    var groups = groupsOf(itemOf(r.line.itemId));
+    draft.optionIds = r.line.optionIds.filter(function (id) { return groups.some(function (g) { return g.options.some(function (o) { return o.id === id; }); }); });
+    draft.qty = r.line.qty; draft.note = r.line.note || '';
+    draft.start = draftSig();
+    S.sayFixing = i;
+    renderSheet();
+  }
+
+  function sayPick(i, itemId) {
+    var r = S.say && S.say.rows[i];
+    if (!r) return;
+    var item = mItem(r.m, itemId);
+    if (!item) return;
+    var seg = r.word ? r.seg.replace(r.word, '\u0001') : r.seg;
+    var nr = sayLine(r.m, item, seg);
+    if (sayHere(nr)) nr = sayModify(nr, r.seg);
+    S.say.rows[i] = nr;
+    render();
+  }
+
+  if (window.YK_TEST) window.YK_TEST.sayParse = function (t) { return sayParse(t); }; // 測試用（step56 測試環境才有 YK_TEST）
+
   /* ---------- 第 18 步：菜單搜尋、分類自動標示 ---------- */
 
   function applySearch(q) {
@@ -2191,6 +2678,11 @@
       case 'pickClose': { S.pickOpen = false; return render(); }
       case 'hotAdd': return addQuick(quickLine(d.id));
       case 'pick': return openPick();
+      case 'sayGo': return sayGo(); // 第 61 步
+      case 'sayTake': return sayTake();
+      case 'sayClear': { S.say = { text: '', rows: [] }; return render(); }
+      case 'sayFix': return sayFix(+d.i);
+      case 'sayPick': return sayPick(+d.i, d.id);
       case 'guide': return openGuide(); // 第 25 步
       case 'vote': return openVote(); // 第 46 步
       case 'castVote': return castVote(d.date, d.type, d.id);
