@@ -1,4 +1,5 @@
 /* 公司點餐頁（第 2 步；第 4 步加上 ?view=history 直接開「我的訂單」）
+ * 第 69 步（紅隊排版 A1、A2）：品項視窗底部「取消」縮窄（字不變，見 style.css）；店家資訊不顯示「菜單版本 115.04」這類內部資訊（publicNote）。
  * 第 6 步：合計不是整數（例如 $22.5）不能送出；菜單和數量旁顯示「最多 20 份」。
  * 第 7 步：取消的團顯示「已取消」和作廢的訂單；每一團的公告顯示在首頁和菜單上方；「我的訂單」標「開團取消」。
  * 第 12 步：頁首名稱改為「YK中午吃什麼-點餐系統」。
@@ -1242,6 +1243,11 @@
 
   function cartChanged() { return JSON.stringify(S.cart) !== S.cartStart; }
 
+  // 第 69 步（紅隊 A2）：備註用「；」分段，拿掉「菜單版本 …」那段（給維護菜單的人看的，同仁用不到）
+  function publicNote(note) {
+    return String(note || '').split('；').filter(function (x) { return x.trim() && !/^\s*菜單版本/.test(x); }).join('；');
+  }
+
   // 第 15 步：店名、備註下方的「看菜單圖」連結（開雲端硬碟看圖頁，可放大，按返回回到點餐頁）
   function menuImageLinks(list) {
     if (!list || !list.length) return '';
@@ -1264,7 +1270,7 @@
     var head = '<div class="store-info"><span class="tag type">' + esc(m.session.type) + '</span> ' +
       (m.session.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
         : m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
-      (m.store.note ? '<p class="small muted">' + esc(m.store.note) + '</p>' : '') + menuImageLinks(m.store.menuImages) + '</div>';
+      (publicNote(m.store.note) ? '<p class="small muted">' + esc(publicNote(m.store.note)) + '</p>' : '') + menuImageLinks(m.store.menuImages) + '</div>'; // 第 69 步
     if (m.myOrder && m.session.open) head += '<div class="notice">你正在修改訂單，送出後會取代原本的訂單（$' + m.myOrder.total + '）。</div>';
     if (m.session.notice) head += '<div class="notice">公告：' + esc(m.session.notice) + '</div>';
     if (m.session.canceled) head += '<div class="notice">這一團已經取消，只能看菜單。</div>';
