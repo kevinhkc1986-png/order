@@ -89,6 +89,7 @@
  *   - 截止倒數改用伺服器時間（後端每個回應帶 st），手機時鐘不準也不會提早或延後。
  *
  * 第 62 步：首頁每團卡片店名下方顯示開團進度：「📞 行政已向店家下單（時間）」「🍱 餐到了（時間），請到 ○○ 拿」。
+ * 第 71 步：儲值（Settings「儲值開放」= TRUE 才出現）：首頁多一張儲值餘額卡；我的訂單已付的單多標「儲值扣／現金」，上方可展開儲值明細。
  */
 (function () {
   'use strict';
@@ -757,13 +758,13 @@
     var list = all.filter(function (s) { return !s.canceled; }); // 第 29 步：已取消的團不顯示
     var voided = voidedNotices(all); // 第 37 步
     if (!list.length) {
-      $view.innerHTML = hello + proxyPicker() + voided + '<div class="card center"><p>' + (all.length ? '今天沒有可以點餐的店。' : '今天還沒有開團。') + '</p><button class="btn" data-act="reload">重新整理</button></div>' + voteCard() + guideLink(); // 第 46 步
+      $view.innerHTML = hello + proxyPicker() + walletCard() + voided + '<div class="card center"><p>' + (all.length ? '今天沒有可以點餐的店。' : '今天還沒有開團。') + '</p><button class="btn" data-act="reload">重新整理</button></div>' + voteCard() + guideLink(); // 第 46 步
       maybeShowGuide(); // 第 25 步
       return;
     }
     list = list.slice().sort(function (a, b) { return a.type === b.type ? 0 : (a.type === '餐點' ? -1 : 1); });
     var who = S.forId ? S.forName : '你'; // 第 20 步
-    $view.innerHTML = hello + proxyPicker() + voided + '<div id="cdHome"></div>' + list.map(function (s) {
+    $view.innerHTML = hello + proxyPicker() + walletCard() + voided + '<div id="cdHome"></div>' + list.map(function (s) {
       var o = s.myOrder;
       var draftN = s.open ? draftCount(s.id) : 0; // 第 18 步：手機裡還沒送出的購物車
       var btns;
@@ -812,9 +813,19 @@
     return '';
   }
 
+  // 第 71 步：儲值餘額卡（Settings「儲值開放」= TRUE 時後端才給 wallet；行政幫人點時是被點的人的餘額）
+  function walletCard() {
+    var w = S.home && S.home.wallet;
+    if (!w) return '';
+    return '<div class="card wallet-card"><div class="row"><span>💜 ' + (S.forId ? esc(S.forName) + ' 的' : '') + '儲值餘額</span><b class="wallet-amt">$' + esc(w.balance) + '</b></div>' +
+      '<p class="small muted" style="margin:2px 0 0">' + (w.paused ? WALLET_PAUSED : '要儲值請把現金交給行政；付款時跟行政說「用儲值扣」。') + '</p></div>'; // 第 71 步修正2：關閉時暫停說明
+  }
+  var WALLET_PAUSED = '儲值暫停使用，餘額保留，重新開放後可繼續用；要退款請找行政。'; // 第 71 步修正2（紅隊 S6）
+
   // 第 40 步：付款標籤。credit＝改單前已付、可以抵用的錢（第 39 步後端給的）
   function payTag(o) {
-    if (o.paid) return '<span class="tag open">已付款</span>';
+    if (o.paid) return '<span class="tag open">已付款</span>' + // 第 71 步：我的訂單多標付款方式
+      (o.method === '儲值' ? ' <span class="tag wal">儲值扣</span>' : o.method === '混合' ? ' <span class="tag wal">儲值＋現金</span>' : o.method === '現金' ? ' <span class="tag">現金</span>' : ''); // 第 71 步修正2：混合
     var c = Number(o.credit) || 0;
     if (c > 0) {
       var diff = (Number(o.total) || 0) - c;
@@ -1643,11 +1654,22 @@
     }).catch(showError); // 第 38 步：讀取中按了返回就不跳
   }
 
+  // 第 71 步：我的訂單上方的儲值卡（餘額＋最近 20 筆，預設收合）
+  function walletHistCard(w) {
+    return '<details class="card wallet-card"><summary class="row"><span>💜 儲值餘額</span><b class="wallet-amt">$' + esc(w.balance) + '</b></summary>' +
+      (w.paused ? '<p class="small muted wallet-paused">' + WALLET_PAUSED + '</p>' : '') + // 第 71 步修正2
+      (w.rows.length ? w.rows.map(function (r) {
+        return '<div class="row small wallet-row"><span>' + esc(String(r.date).slice(5).replace('-', '/')) + ' ' + esc(r.type) + '</span>' +
+          '<span><b class="' + (r.amount < 0 ? 'neg' : 'pos') + '">' + (r.amount > 0 ? '+' : '−') + Math.abs(r.amount) + '</b>　餘額 $' + esc(r.balance) + '</span></div>';
+      }).join('') : '<p class="small muted">還沒有儲值紀錄。</p>') + '</details>';
+  }
+
   function renderHistory() {
     var d = S.history;
     $title.textContent = d.forName ? d.forName + ' 的訂單' : '我的訂單'; // 第 20 步
     var html = '<div class="card"><div class="row"><span>尚未付款</span><b style="font-size:22px">$' + d.unpaid + '</b></div>' +
-      '<p class="small muted" style="margin:4px 0 0">只計算有效且尚未付款的訂單，現金請交給行政。</p></div>';
+      '<p class="small muted" style="margin:4px 0 0">只計算有效且尚未付款的訂單，' + (d.wallet && !d.wallet.paused ? '可以付現金，或請行政從儲值扣。' : '現金請交給行政。') + '</p></div>';
+    if (d.wallet) html += walletHistCard(d.wallet); // 第 71 步：儲值餘額＋明細
     if (!d.orders.length) html += '<p class="center muted">還沒有訂單紀錄。</p>';
     html += d.orders.map(function (o) {
       var st = o.status === '取消' ? '<span class="tag">已取消</span>'
