@@ -86,6 +86,8 @@
  *   - 取消已付款（或改單前付過）的單時，確認框多一句「已付款 $N：截止前重新點會自動抵用；不點了請找行政退錢」。
  *   - 首頁：這團取消了自己的已付款單、還沒重新點時，卡片多一行「取消的單已付 $N…」（後端 spare）。
  *   - 截止倒數改用伺服器時間（後端每個回應帶 st），手機時鐘不準也不會提早或延後。
+ *
+ * 第 62 步：首頁每團卡片店名下方顯示開團進度：「📞 行政已向店家下單（時間）」「🍱 餐到了（時間），請到 ○○ 拿」。
  */
 (function () {
   'use strict';
@@ -787,7 +789,7 @@
         '<div class="row"><span class="tag type">' + esc(s.type) + '</span>' +
         (s.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
           : s.open ? '<span class="tag open">開放中・' + esc(s.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') + '</div>' +
-        '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + notice +
+        '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + progressLine(s) + notice + // 第 62 步
         (o ? '<p class="small">' + esc(who) + '已點餐：<b>$' + o.total + '</b>　' + payTag(o) + '</p>' // 第 40 步
            : '<p class="small muted">' + esc(who) + (s.open ? '還沒點餐' : '這團沒有點餐') + '</p>') +
         (!o && s.spare > 0 ? '<p class="small spare-note">取消的單已付 $' + esc(s.spare) + '，' + (s.open ? '截止前重新點會自動抵用；不點了' : '') + '請找行政退錢</p>' : '') + // 第 58 步
@@ -796,6 +798,17 @@
         '<div class="btn-row">' + btns + '</div></div>';
     }).join('') + voteCard() + guideLink(); // 第 46 步
     maybeShowGuide(); // 第 25 步
+  }
+
+  // 第 62 步：開團進度（行政在後台按「已下單」「餐到了」）
+  function progressLine(s) {
+    var t = s.progressTime ? '（' + esc(s.progressTime) + '）' : '';
+    if (s.progress === '餐到了') {
+      var place = S.home && S.home.pickupPlace;
+      return '<div class="progress arrived">🍱 餐到了' + t + (place ? '，請到 ' + esc(place) + ' 拿' : '') + '</div>';
+    }
+    if (s.progress === '已下單') return '<div class="progress ordered">📞 行政已向店家下單' + t + '</div>';
+    return '';
   }
 
   // 第 40 步：付款標籤。credit＝改單前已付、可以抵用的錢（第 39 步後端給的）

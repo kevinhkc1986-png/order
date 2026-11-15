@@ -349,3 +349,8 @@ body.proxying .cd-banner { top: 100px; }
 .say-opt.def small { margin-left: 3px; padding: 0 5px; border-radius: 6px; background: var(--line); color: var(--muted); font-size: 11px; }
 .say-flag { margin-top: 4px; font-size: 14px; color: var(--warn); font-weight: 600; }
 .btn-row .btn.say-take { flex: 2; }
+
+/* 第 62 步：首頁卡片的開團進度 */
+.progress { border-radius: 10px; padding: 8px 12px; margin: 6px 0 10px; font-size: 15px; font-weight: 600; }
+.progress.ordered { background: #e8f0fe; color: #1a56c4; }
+.progress.arrived { background: var(--brand-soft); color: var(--brand); }
