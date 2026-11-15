@@ -358,3 +358,13 @@ body.proxying .cd-banner { top: 100px; }
 /* 第 69 步（紅隊排版 A1）：品項視窗底部「取消」縮窄，「加入購物車 $200」在手機上一行放得下（字不變） */
 .sheet-foot .btn[data-sact="close"] { flex: 0 0 auto; padding: 0 14px; }
 .sheet-foot .btn[data-sact="save"] { flex: 1; white-space: nowrap; padding: 0 12px; }
+
+/* 第 71 步：儲值 */
+.wallet-card { background: #faf5ff; border-color: #e9d7f7; }
+.wallet-card .wallet-amt { font-size: 20px; color: #6a1b9a; }
+details.wallet-card > summary { list-style: none; cursor: pointer; }
+details.wallet-card > summary::-webkit-details-marker { display: none; }
+details.wallet-card[open] > summary { margin-bottom: 6px; }
+.wallet-row { padding: 4px 0; border-top: 1px dashed #e9d7f7; }
+.wallet-row .neg { color: #c62828; } .wallet-row .pos { color: #06a35a; }
+.tag.wal { background: #f3e8fd; color: #6a1b9a; }
