@@ -2217,7 +2217,7 @@
       if (hit) cand.push(hit);
     });
     cand.sort(function (a, b) { return b.key.length - a.key.length; });
-    var ids = defaultIdsOf(m, item), said = {};
+    var ids = defaultIdsOf(m, item), said = {}, flags = [];
     var rest = text;
     cand.forEach(function (c) {
       var at = rest.indexOf(c.key);
@@ -2225,17 +2225,15 @@
       rest = rest.slice(0, at) + '\u0001' + rest.slice(at + c.key.length); // 拿掉比到的字（留記號，免得前後字黏成別的詞）
       var g = c.g;
       var inG = function (id) { return g.options.some(function (x) { return x.id === id; }); };
-      if (g.single || g.max === 1) {
-        ids = ids.filter(function (id) { return !inG(id); });
-        ids.push(c.o.id);
-      } else {
-        if (!said[g.id]) ids = ids.filter(function (id) { return !inG(id); }); // 第一次說到這個多選群組：先拿掉預設的
-        var n = ids.filter(inG).length;
-        if (ids.indexOf(c.o.id) < 0 && n < g.max) ids.push(c.o.id);
-      }
+      if (!said[g.id]) ids = ids.filter(function (id) { return !inG(id); }); // 第一次說到這個群組：先拿掉預設的
+      var n = ids.filter(inG).length;
+      if (ids.indexOf(c.o.id) >= 0) { said[g.id] = true; return; }
+      if (n >= Math.max(1, g.single ? 1 : g.max)) { // 修正 1：超過可選數量不偷換，請同仁自己選
+        flags.push('「' + g.name + '」最多選 ' + (g.single ? 1 : g.max) + ' 個，「' + c.o.name + '」沒加上，請自己選');
+      } else ids.push(c.o.id);
       said[g.id] = true;
     });
-    return { ids: ids, said: said, rest: rest };
+    return { ids: ids, said: said, rest: rest, flags: flags };
   }
 
   // 數量：「兩杯」「2份」「x2」「×3」，或單獨的數字；回傳 { qty, rest }
@@ -2254,13 +2252,36 @@
       .replace(/[^一-鿿a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  // 常見的加料說法（修正 1）：剩下的字裡有這些，或有這家店任何一樣東西的加料名，就當成「說了加料」
+  var SAY_TOPPINGS = ['珍珠', '波霸', '粉圓', '椰果', '布丁', '仙草', '粉粿', '愛玉', '芋圓', '寒天', '奶蓋', '芝芝', '雙q', '蘆薈', '茶凍', '咖啡凍', '紅豆', '燕麥', '蒟蒻', '小紫蘇', '杏仁凍', '綠茶凍', '養樂多', '多多'];
+  function sayTopWord(w, here) {
+    var all = SAY_TOPPINGS.concat(Object.keys(S.menu ? sayAllTops(S.menu) : {})).concat(Object.keys(here || {}));
+    all.sort(function (a, b) { return b.length - a.length; });
+    for (var i = 0; i < all.length; i++) if (all[i].length >= 2 && w.indexOf(all[i]) >= 0) return all[i];
+    return '';
+  }
+  function sayAllTops(m) {
+    if (m._sayTops) return m._sayTops;
+    var t = {};
+    Object.keys(m.groups).forEach(function (k) {
+      var g = m.groups[k];
+      if (/加料|配料|加口感/.test(g.name)) g.options.forEach(function (o) { t[sayBase(o.name)] = 1; });
+    });
+    try { Object.defineProperty(m, '_sayTops', { value: t, enumerable: false, configurable: true }); } catch (x) {}
+    return t;
+  }
+
   // 一樣東西（品項已決定）→ 一列結果
   function sayLine(m, item, seg, extra) {
     var groups = mGroups(m, item);
     var op = sayOptions(m, item, seg);
     var q = sayQty(op.rest);
     var qty = q.qty || 1;
-    var flags = [], note = [];
+    var flags = op.flags.slice(), note = [];
+    // 修正 1（使用者 11-15 實測：麻古說「珍珠」被當成備註、沒算錢）：說了加料，但這樣東西的加料沒有 → 不放備註，列出這家有的請同仁自己選
+    var topG = groups.filter(function (g) { return /加料|配料|加口感|加點|加量/.test(g.name); });
+    var topNames = {};
+    topG.forEach(function (g) { g.options.forEach(function (o) { topNames[sayBase(o.name)] = 1; }); });
     if (qty > MAX_QTY) { flags.push('一行最多 ' + MAX_QTY + ' 份'); qty = MAX_QTY; }
     sayLeft(q.rest).split(' ').forEach(function (w) {
       if (!w) return;
@@ -2270,6 +2291,11 @@
       if (sw && hasSweet) flags.push('甜度「' + sw[0] + '」這家沒有，請自己選');
       else if (ic && hasIce) flags.push('冰量「' + ic[0] + '」這家沒有，請自己選');
       else if (sw || ic) flags.push('「' + item.name + '」不能選「' + w + '」');
+      else if (sayTopWord(w, topNames)) {
+        var tw = sayTopWord(w, topNames);
+        flags.push(topG.length ? '加料沒有「' + tw + '」（這杯可以加：' + topG.map(function (g) { return g.options.map(function (o) { return o.name; }).join('、'); }).join('、') + '），請自己選'
+          : '「' + item.name + '」不能加「' + tw + '」');
+      }
       else if (w.length >= 2 || /^[辣酸甜鹹]$/.test(w)) note.push(w);
     });
     var line = { itemId: item.id, optionIds: op.ids, qty: qty, note: note.join(' ').slice(0, 50), stale: false };
