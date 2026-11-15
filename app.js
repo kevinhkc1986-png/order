@@ -1260,7 +1260,9 @@
     if (m.session.late) head += '<div class="notice">這一團已經截止，你是行政，可以幫忙補單或改單。</div>';
     // 第 49 步修正 2：看得到意見回饋的人，菜單頁多一個「回報這家菜單」（自動帶店名、類型菜單錯誤）
     if (S.home && S.home.fb && !S.forId) head += '<p class="fb-menu-link"><button class="link-btn" data-act="fbMenu">回報這家菜單有錯</button></p>';
-    if (m.session.open) head += sayCardHtml(); // 第 61 步：一句話點餐（改單時也有，「再加一杯」從目前的單開始）
+    // 第 61 步：一句話點餐（改單時也有，「再加一杯」從目前的單開始）
+    //   測試中：後端有給 say（Settings「一句話點餐開放」或「一句話點餐測試人員」）才顯示；幫別人點時不顯示
+    if (m.session.open && sayOn()) head += sayCardHtml();
     if (m.session.open && !S.cart.length && !S.forId) head += lastOrderHtml(); // 第 18 步：上次在這家點的（第 20 步：幫別人點時不顯示；第 50 步：移到最上面，常客最快）
     if (m.session.open && !S.cart.length) head += pickCardHtml(); // 第 50 步：不知道吃什麼？（預設收起）
 
@@ -2140,6 +2142,9 @@
     });
     return ids;
   }
+  // 測試中：後端說這位同仁看得到才顯示（使用者 11-15：先只給測試人員）
+  function sayOn() { return !!(S.home && S.home.say && !S.forId); }
+
   // 這一列是不是現在打開的這家（菜單背景更新後物件會換，所以比 SessionID）
   function sayHere(r) { return !!(S.menu && r.m && r.m.session.id === S.menu.session.id); }
 
