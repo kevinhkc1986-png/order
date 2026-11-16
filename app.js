@@ -90,6 +90,7 @@
  *
  * 第 62 步：首頁每團卡片店名下方顯示開團進度：「📞 行政已向店家下單（時間）」「🍱 餐到了（時間），請到 ○○ 拿」。
  * 第 71 步：儲值（Settings「儲值開放」= TRUE 才出現）：首頁多一張儲值餘額卡；我的訂單已付的單多標「儲值扣／現金」，上方可展開儲值明細。
+ * 第 74 步：行政「幫誰點」從下拉選單改成選人面板：可搜尋、最近幫點過排前面、全部依姓氏筆畫、標「今天已點／還沒點」、臨時人員紫色標籤。
  */
 (function () {
   'use strict';
@@ -1480,7 +1481,7 @@
     return JSON.stringify([draft.optionIds.slice().sort(), draft.qty, String(note || '').trim()]);
   }
   function askCloseSheet() {
-    if ($sheet.hidden || !draft || S.sheetMode === 'pick') return closeSheet(); // 第 50 步：幫我選直接關
+    if ($sheet.hidden || !draft || S.sheetMode === 'pick' || S.sheetMode === 'proxy') return closeSheet(); // 第 50 步：幫我選直接關；第 74 步：選人面板也是
     if (draftSig() !== draft.start && !window.confirm('還沒加入購物車，要放棄嗎？')) return;
     closeSheet();
   }
@@ -2782,6 +2783,7 @@
       }
       case 'copyCart': return copyCart(); // 第 40 步
       case 'proxyOff': return setProxy('', ''); // 第 40 步：送出成功畫面的「改回自己」
+      case 'proxyOpen': return openProxyPicker(); // 第 74 步：選人面板
       case 'back': return go('menu');
       case 'home': return go('home');
       case 'reorder': return addLastOrder();
@@ -2827,16 +2829,104 @@
 
   /* ---------- 第 20 步：行政代點 ---------- */
 
+  // 第 74 步：原本的下拉選單人多了要一直滑，改成按一下從下面滑出「選人面板」：
+  //   上面搜尋框（打姓或名任一字就篩）、「最近幫點過」（這支手機記得，最多 5 人）、全部（依姓氏筆畫），
+  //   每人標「今天已點／還沒點」，臨時人員用紫色小標籤。名單跟首頁一起載入，面板一按就開不用等。
+  var PROXY_RECENT_KEY = 'yk_proxy_recent';
+  var PROXY_RECENT_MAX = 5;
+
   function proxyPicker() {
     var adm = S.home && S.home.admin;
     if (!adm) return '';
-    var opts = '<option value="">自己</option>' + adm.people.map(function (p) {
-      return '<option value="' + esc(p.lineId) + '"' + (p.lineId === S.forId ? ' selected' : '') + '>' +
-        esc(p.name) + (p.temp ? '（臨時）' : '') + '</option>';
-    }).join('');
-    return '<div class="card proxy-pick"><label class="field" for="forWho">幫誰點（行政）</label>' +
-      '<select id="forWho">' + opts + '</select></div>';
+    return '<div class="card proxy-pick"><div class="field">幫誰點（行政）</div>' +
+      '<button type="button" class="proxy-choose" data-act="proxyOpen" id="forWho">' +
+      '<span>' + (S.forId ? esc(S.forName) : '自己') + '</span><span class="proxy-choose-go">🔍 選人</span></button></div>';
   }
+
+  function proxyRecent() {
+    try { var v = JSON.parse(localStorage.getItem(PROXY_RECENT_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+    catch (x) { return []; }
+  }
+  function rememberProxy(id) {
+    if (!id) return;
+    var list = proxyRecent().filter(function (x) { return x !== id; });
+    list.unshift(id);
+    try { localStorage.setItem(PROXY_RECENT_KEY, JSON.stringify(list.slice(0, PROXY_RECENT_MAX))); } catch (x) {}
+  }
+
+  // 依姓氏筆畫排（瀏覽器的繁中排序就是筆畫）；瀏覽器不支援就照後台給的順序
+  var proxyCollator = null;
+  try { proxyCollator = new Intl.Collator('zh-TW'); } catch (x) {}
+  function proxySorted(list) {
+    var out = list.slice();
+    if (proxyCollator) out.sort(function (a, b) { return proxyCollator.compare(a.name, b.name); });
+    return out;
+  }
+
+  function openProxyPicker() {
+    var adm = S.home && S.home.admin;
+    if (!adm) return;
+    S.sheetMode = 'proxy';
+    S.proxyQ = '';
+    $sheetBody.innerHTML = '<div class="row"><h2>幫誰點？</h2><button class="btn pick-x" data-xact="close">關閉</button></div>' +
+      '<input id="proxyQ" class="proxy-q" type="search" placeholder="搜尋姓名…" autocomplete="off" enterkeyhint="search">' +
+      '<div id="proxyList" class="proxy-list"></div>';
+    renderProxyList();
+    $sheet.hidden = false;
+    syncBack();
+  }
+
+  function proxyRow(p) {
+    // 後端還是舊版（沒有 ordered）時不標，免得全部顯示「還沒點」
+    var n = typeof p.ordered === 'number' ? (S.home.sessions || []).length : 0;
+    var st = '';
+    if (n && p.ordered >= n) st = '<span class="px-ok">✓ 今天已點</span>';
+    else if (n && p.ordered) st = '<span class="px-part">已點 ' + p.ordered + '/' + n + '</span>';
+    else if (n) st = '<span class="px-no">還沒點</span>';
+    return '<button type="button" class="px-row' + (p.lineId === S.forId ? ' on' : '') + '" data-xact="pick" data-id="' + esc(p.lineId) + '">' +
+      '<span class="px-name">' + esc(p.name) + (p.temp ? '<span class="px-temp">臨時</span>' : '') + '</span>' + st + '</button>';
+  }
+
+  function renderProxyList() {
+    var box = document.getElementById('proxyList');
+    if (!box) return;
+    var people = proxySorted(S.home.admin.people);
+    var q = String(S.proxyQ || '').replace(/\s+/g, '').toLowerCase();
+    var html = '';
+    if (q) {
+      var hit = people.filter(function (p) { return String(p.name).toLowerCase().indexOf(q) >= 0; });
+      html = '<div class="px-grp">符合「' + esc(S.proxyQ.trim()) + '」的人（' + hit.length + '）</div>' +
+        (hit.length ? hit.map(proxyRow).join('') : '<p class="muted center-text">找不到這個人</p>');
+    } else {
+      var byId = {};
+      people.forEach(function (p) { byId[p.lineId] = p; });
+      var recent = proxyRecent().map(function (id) { return byId[id]; }).filter(Boolean);
+      if (recent.length) html += '<div class="px-grp">最近幫點過</div>' + recent.map(proxyRow).join('');
+      html += '<div class="px-grp">全部（依姓氏筆畫，共 ' + people.length + ' 人）</div>' + people.map(proxyRow).join('');
+    }
+    if (S.forId) html += '<button type="button" class="px-self" data-xact="self">改回自己</button>';
+    box.innerHTML = html;
+  }
+
+  $sheetBody.addEventListener('input', function (e) {
+    if (e.target.id !== 'proxyQ') return;
+    S.proxyQ = e.target.value;
+    renderProxyList(); // 只重畫名單，搜尋框不動（不會收鍵盤）
+  });
+
+  $sheetBody.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-xact]');
+    if (!b) return;
+    var a = b.dataset.xact;
+    if (a === 'close') return closeSheet();
+    if (a === 'self') { closeSheet(); return setProxy('', ''); }
+    if (a === 'pick') {
+      var p = S.home.admin.people.filter(function (x) { return x.lineId === b.dataset.id; })[0];
+      closeSheet();
+      if (!p || p.lineId === S.forId) return;
+      setProxy(p.lineId, p.name);
+    }
+  });
 
   // 第 49 步：意見回饋表單（打字、選店家只記下來，不重畫）
   $view.addEventListener('input', function (e) {
@@ -2850,12 +2940,10 @@
 
   $view.addEventListener('change', function (e) {
     if (e.target.id === 'fbStore') { S.fbForm.storeId = e.target.value; return; } // 第 49 步
-    if (e.target.id !== 'forWho') return;
-    var sel = e.target;
-    setProxy(sel.value, sel.value ? sel.options[sel.selectedIndex].text.replace(/（臨時）$/, '') : '');
   });
 
   function setProxy(id, name) {
+    rememberProxy(id); // 第 74 步：記進「最近幫點過」
     S.forId = id;
     S.forName = name;
     S.menu = null; S.cart = [];
