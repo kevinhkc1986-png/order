@@ -91,6 +91,7 @@
  * 第 62 步：首頁每團卡片店名下方顯示開團進度：「📞 行政已向店家下單（時間）」「🍱 餐到了（時間），請到 ○○ 拿」。
  * 第 71 步：儲值（Settings「儲值開放」= TRUE 才出現）：首頁多一張儲值餘額卡；我的訂單已付的單多標「儲值扣／現金」，上方可展開儲值明細。
  * 第 74 步：行政「幫誰點」從下拉選單改成選人面板：可搜尋、最近幫點過排前面、全部依姓氏筆畫、標「今天已點／還沒點」、臨時人員紫色標籤。
+ * 第 75 步：行政已按「已下單」的團（後台會自動截止），行政補單、改單、取消前多跳提醒「記得另外打電話告訴店家」。
  */
 (function () {
   'use strict';
@@ -1577,7 +1578,10 @@
   function submitOrder() {
     if (S.busy) return;
     if (!isWhole(cartTotal())) return alertMsg(wholeMsg());
-    if (S.menu.session.late && !window.confirm('這一團已經截止，確定要' + (S.forId ? '幫 ' + S.forName + ' ' : '') + '補單嗎？')) return; // 第 20 步
+    var placed = placedAt(S.menu.session.id); // 第 75 步：已向店家下單
+    if (placed && !window.confirm('這一團行政已在 ' + placed + ' 向店家下單。\n' + (S.forId ? '幫 ' + S.forName + ' ' : '') +
+      (S.menu.myOrder ? '改單' : '補單') + '後，記得另外打電話告訴店家。\n\n確定要送出嗎？')) return;
+    if (!placed && S.menu.session.late && !window.confirm('這一團已經截止，確定要' + (S.forId ? '幫 ' + S.forName + ' ' : '') + '補單嗎？')) return; // 第 20 步
     S.busy = true;
     var btn = document.getElementById('bottomBtn');
     btn.disabled = true; btn.textContent = '送出中…';
@@ -1613,13 +1617,22 @@
     });
   }
 
+  // 第 75 步：這一團行政已經按了「已下單」（或餐到了）就回時間（例如 11:30，沒記到時間回「稍早」），沒有回空字串
+  function placedAt(sessionId) {
+    var ses = ((S.home && S.home.sessions) || []).filter(function (x) { return x.id === sessionId; })[0];
+    if (!ses || !ses.progress) return '';
+    return ses.progress === '已下單' ? (ses.progressTime || '稍早') : '稍早';
+  }
+
   function cancelOrder(sessionId) {
     // 第 58 步（紅隊 7）：已付款（或改單前付過）的單，確認框提醒找行政退錢
     var ses = ((S.home && S.home.sessions) || []).filter(function (x) { return x.id === sessionId; })[0];
     var mo = ses && ses.myOrder;
     var paidAmt = mo ? (mo.paid ? Number(mo.total) || 0 : Number(mo.credit) || 0) : 0;
     var payLine = paidAmt > 0 ? '\n\n' + (S.forId ? '這張單' : '你') + '已付款 $' + paidAmt + '：截止前重新點會自動抵用；不點了請找行政退錢。' : '';
-    if (!window.confirm((S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。') + payLine)) return; // 第 25 步
+    var placed = placedAt(sessionId); // 第 75 步：已向店家下單後取消，要另外跟店家說
+    var placedLine = placed ? '\n\n這一團行政已在 ' + placed + ' 向店家下單，取消後記得另外打電話告訴店家。' : '';
+    if (!window.confirm((S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。') + payLine + placedLine)) return; // 第 25 步
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }, function () { setLoading('排隊中，請稍候…'); }).then(function () { // 第 60 步
       clearCartDraft(sessionId); // 第 18 步
