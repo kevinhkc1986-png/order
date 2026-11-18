@@ -82,6 +82,8 @@
  * 第 61 步（一句話點餐，不接 AI）：菜單上方「💬 一句話點餐」輸入框（截止前、改單時都有），按「幫我填」在手機上比對這家（和今天另一家）菜單的
  *   品名、選項、數量，結果列在卡片上：✅ 對上了／⚠️ 要自己選／❓ 有幾個像的點一個／✖️ 對不上請用菜單點，沒說的選項標「預設」。
  *   按「放進購物車」才加進去（購物車本來就從目前的單開始，不會蓋掉），照舊在購物車按送出。甜度：半糖＝五分、微糖＝三分，少糖、全糖不猜。
+ *   第 79 步：按「幫我填」時背景把這句和比對結果送回試算表「一句話紀錄」分頁（sayLog），按「放進購物車」再補上放了幾樣；
+ *   只寫進自己的試算表，不送到外面、不接 AI，統計只有系統管理者在「⚙ 系統管理」頁看得到。
  *
  * 第 58 步（紅隊 6、7、11）：
  *   - 取消已付款（或改單前付過）的單時，確認框多一句「已付款 $N：截止前重新點會自動抵用；不點了請找行政退錢」。
@@ -2524,6 +2526,7 @@
     if (!sayLeft(sayNorm(text))) { toast('先打一句想點的，例如：珍奶半糖去冰'); return render(); }
     S.say.rows = sayParse(text);
     if (!S.say.rows.length) S.say.rows = [{ kind: 'bad', m: S.menu, seg: text, msg: '聽不出要點什麼' }];
+    sayLogSend(text, S.say.rows); // 第 79 步：背景回報使用紀錄（不用等、失敗不管）
     if (el) el.blur(); // 收起鍵盤，看得到結果
     render();
     var card = document.getElementById('sayCard');
@@ -2612,6 +2615,7 @@
 
   function sayTake() {
     var rows = (S.say && S.say.rows) || [];
+    var logId = S.say && S.say.logId; // 第 79 步
     var here = 0, other = {}, dels = [];
     rows.forEach(function (r) {
       if (r.kind === 'ok' && sayHere(r)) { S.cart.push({ itemId: r.line.itemId, optionIds: r.line.optionIds.slice(), qty: r.line.qty, note: r.line.note, stale: false }); here++; }
@@ -2623,12 +2627,34 @@
     dels.sort(function (a, b) { return b - a; }).forEach(function (i) { S.cart.splice(i, 1); here++; });
     var names = Object.keys(other).map(function (id) { sayToOtherDraft(other[id].m, other[id].lines); return other[id].m.store.name; });
     var left = rows.filter(function (r) { return r.kind === 'need' || r.kind === 'pick' || r.kind === 'bad'; });
-    S.say = left.length ? { text: S.say.text, rows: left } : { text: '', rows: [] };
+    S.say = left.length ? { text: S.say.text, rows: left, logId: logId } : { text: '', rows: [] };
+    var putN = here + Object.keys(other).reduce(function (n, id) { return n + other[id].lines.length; }, 0);
+    if (logId && putN) sayLogApi({ id: logId, took: putN }); // 第 79 步：補上「放進購物車」
     var msg = (here ? '已放進購物車' : '') + (names.length ? (here ? '；' : '') + '「' + names.join('、') + '」的放在那家購物車，回首頁按「繼續點餐」送出' : '');
     if (left.length) { toast(msg + (msg ? '，' : '') + '還有 ' + left.length + ' 項要自己處理'); return render(); }
     toast(msg);
     if (here) return go('cart');
     render();
+  }
+
+  // 第 79 步：一句話點餐使用紀錄（使用者 11-18：記整句＋結果，統計只給系統管理者看）。
+  // 背景送到試算表「一句話紀錄」分頁；不用等、送不出去也不影響點餐。幫別人點時不顯示輸入框，也就不會送。
+  function sayLogApi(data) {
+    try { api('sayLog', data).catch(function () {}); } catch (e) {}
+  }
+  function sayLogSend(text, rows) {
+    if (!sayOn()) return;
+    var id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    S.say.logId = id;
+    var res = { ok: 0, need: 0, pick: 0, bad: 0, mod: 0, del: 0 }, hit = [], miss = [];
+    rows.forEach(function (r) {
+      if (res[r.kind] != null) res[r.kind]++;
+      var it = r.line && r.m && mItem(r.m, r.line.itemId);
+      if (it && hit.indexOf(it.name) < 0) hit.push(it.name);
+      var w = r.kind === 'pick' ? (r.word || '') + '？' : r.kind === 'bad' ? sayLeft(sayQty(sayNorm(r.seg || '')).rest).replace(/ /g, '') : ''; // 拿掉「一個」「兩杯」
+      if (w && w !== '？' && miss.indexOf(w) < 0) miss.push(w);
+    });
+    sayLogApi({ id: id, store: (S.menu && S.menu.store && S.menu.store.name) || '', text: String(text || '').slice(0, 100), res: res, hit: hit, miss: miss });
   }
 
   // 要自己選的那一列：打開品項視窗，先帶入聽到的選項、數量、備註
