@@ -244,6 +244,7 @@ body.proxying .cd-banner { top: 100px; }
 .edit-hint { color: var(--brand); margin: 6px 0 0; }
 .edit-hint.muted { color: var(--muted); }
 .spare-note { color: var(--warn); margin: 4px 0 0; } /* 第 58 步：取消的單已付，重新點會抵用 */
+.touch-note { color: #8a5a00; background: #fff6e0; border-radius: 6px; padding: 4px 8px; margin: 6px 0 0; } /* 第 91 步：行政幫你改過／取消了 */
 
 /* 第 31 步：讓同仁記得按送出 */
 .notice.unsent { font-weight: 600; font-size: 16px; border: 1px solid #f5c26b; }
