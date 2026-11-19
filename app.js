@@ -100,6 +100,11 @@
  *   - 首頁截止倒數：已經點了另一家、這家也沒放購物車，就不再對這家喊「你還沒點餐」。
  *   - 首頁「你好，○○」右邊一個小開關「🔔 截止提醒」（後端有給 remind 才出現；幫別人點時不出現），
  *     按下去先變、跳說明小視窗、背景存（setRemind），失敗再改回。打開的人今天還沒點，截止前約 10 分鐘收到 LINE 私訊。
+ * 第 91 步（行政代點防誤改）：
+ *   - 行政幫人改單或取消時，那張單是同仁自己點的（後端 myOrder.by 是空白），先多問一次：
+ *     「這張是 ○○ 自己 09:18 點的（燒肉飯 $70），確定要幫 ○○ 改／取消嗎？」行政自己代點的單照舊不多問。
+ *     後端還沒更新（沒有 by）就不多問，前後端上線順序對調不會壞。
+ *   - 首頁每團多一行「✏️ 行政○○ 09:52 幫你改過／點的／取消了」（後端 touch）；我的訂單的取消標「行政○○取消」。不發 LINE。
  */
 (function () {
   'use strict';
@@ -802,7 +807,7 @@
         '<div class="row"><span class="tag type">' + esc(s.type) + '</span>' +
         (s.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
           : s.open ? '<span class="tag open">開放中・' + esc(s.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') + '</div>' +
-        '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + progressLine(s) + notice + // 第 62 步
+        '<h2 style="margin-top:8px">' + esc(s.storeName) + '</h2>' + progressLine(s) + notice + touchLine(s) + // 第 62 步；第 91 步
         (o ? '<p class="small">' + esc(who) + '已點餐：<b>$' + o.total + '</b>　' + payTag(o) + '</p>' // 第 40 步
            : '<p class="small muted">' + esc(who) + (s.open ? '還沒點餐' : '這團沒有點餐') + '</p>') +
         (!o && s.spare > 0 ? '<p class="small spare-note">取消的單已付 $' + esc(s.spare) + '，' + (s.open ? '截止前重新點會自動抵用；不點了' : '') + '請找行政退錢</p>' : '') + // 第 58 步
@@ -811,6 +816,25 @@
         '<div class="btn-row">' + btns + '</div></div>';
     }).join('') + voteCard() + guideLink(); // 第 46 步
     maybeShowGuide(); // 第 25 步
+  }
+
+  // 第 91 步：這團最後一次是行政幫忙點／改／取消的，標一行（本人之後自己改過就不標）
+  function touchLine(s) {
+    var t = s.touch;
+    if (!t || !t.by) return '';
+    var what = t.kind === '改' ? '改過' : t.kind === '取消' ? '取消了' : '點的';
+    return '<p class="small touch-note">✏️ 行政' + esc(t.by) + (t.at ? ' ' + esc(t.at) : '') + ' ' +
+      (S.forId ? '' : '幫你') + what + '</p>';
+  }
+
+  // 第 91 步：行政要改／取消的是同仁自己點的單（by 明確是空白），先多問一次；不是就回 true
+  function confirmOthersOrder(mo, verb) {
+    if (!S.forId || !mo || mo.by !== '') return true;
+    var sum = mo.summary || (mo.lines || []).slice(0, 2).map(function (l) {
+      return (l.name || '') + (l.qty > 1 ? '×' + l.qty : '');
+    }).join('、') + ((mo.lines || []).length > 2 ? ' 等 ' + mo.lines.length + ' 項' : '');
+    return window.confirm('⚠ 這張是 ' + S.forName + ' 自己' + (mo.at ? ' ' + mo.at + ' ' : '') + '點的（' + (sum ? sum + ' ' : '') + '$' + mo.total + '）。\n\n' +
+      '確定要幫 ' + S.forName + ' ' + verb + '嗎？\n' + S.forName + ' 打開點餐頁會看到是行政' + verb + '的。');
   }
 
   // 第 62 步：開團進度（行政在後台按「已下單」「餐到了」）
@@ -1588,6 +1612,7 @@
   function submitOrder() {
     if (S.busy) return;
     if (!isWhole(cartTotal())) return alertMsg(wholeMsg());
+    if (S.menu.myOrder && !confirmOthersOrder(S.menu.myOrder, '改單')) return; // 第 91 步
     var placed = placedAt(S.menu.session.id); // 第 75 步：已向店家下單
     if (placed && !window.confirm('這一團行政已在 ' + placed + ' 向店家下單。\n' + (S.forId ? '幫 ' + S.forName + ' ' : '') +
       (S.menu.myOrder ? '改單' : '補單') + '後，記得另外打電話告訴店家。\n\n確定要送出嗎？')) return;
@@ -1642,6 +1667,7 @@
     var payLine = paidAmt > 0 ? '\n\n' + (S.forId ? '這張單' : '你') + '已付款 $' + paidAmt + '：截止前重新點會自動抵用；不點了請找行政退錢。' : '';
     var placed = placedAt(sessionId); // 第 75 步：已向店家下單後取消，要另外跟店家說
     var placedLine = placed ? '\n\n這一團行政已在 ' + placed + ' 向店家下單，取消後記得另外打電話告訴店家。' : '';
+    if (!confirmOthersOrder(mo, '取消')) return; // 第 91 步：同仁自己點的單，先多問一次
     if (!window.confirm((S.forId ? '確定要取消 ' + S.forName + ' 在這一團的訂單嗎？' : '確定要取消這一團的訂單嗎？\n取消後，截止前還可以重新點。') + payLine + placedLine)) return; // 第 25 步
     setLoading('取消中…');
     api('cancel', { sessionId: sessionId }, function () { setLoading('排隊中，請稍候…'); }).then(function () { // 第 60 步
@@ -1696,7 +1722,7 @@
     if (d.wallet) html += walletHistCard(d.wallet); // 第 71 步：儲值餘額＋明細
     if (!d.orders.length) html += '<p class="center muted">還沒有訂單紀錄。</p>';
     html += d.orders.map(function (o) {
-      var st = o.status === '取消' ? '<span class="tag">已取消</span>'
+      var st = o.status === '取消' ? '<span class="tag">' + (o.cancelBy ? '行政' + esc(o.cancelBy) + '取消' : '已取消') + '</span>' // 第 91 步
         : o.status === '團取消' ? '<span class="tag warn">開團取消</span>'
         : payTag(o); // 第 40 步
       if (o.proxyBy) st = '<span class="tag">行政代點</span> ' + st; // 第 20 步
