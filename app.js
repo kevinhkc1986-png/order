@@ -94,6 +94,12 @@
  * 第 71 步：儲值（Settings「儲值開放」= TRUE 才出現）：首頁多一張儲值餘額卡；我的訂單已付的單多標「儲值扣／現金」，上方可展開儲值明細。
  * 第 74 步：行政「幫誰點」從下拉選單改成選人面板：可搜尋、最近幫點過排前面、全部依姓氏筆畫、標「今天已點／還沒點」、臨時人員紫色標籤。
  * 第 75 步：行政已按「已下單」的團（後台會自動截止），行政補單、改單、取消前多跳提醒「記得另外打電話告訴店家」。
+ * 第 83 步（餐點、飲料點餐流程，使用者 11-19 定 A 方案）：
+ *   - 菜單頁店名下面多一行「切換到飲料／餐點：店名 ›」，一按直接進另一家菜單，原本這家的購物車暫存在手機。
+ *   - 送出成功畫面：「不用，回首頁」「🥤 點飲料」並排一樣大（原本是大綠鈕「接著點…」）；兩家都點好了只剩回首頁。
+ *   - 首頁截止倒數：已經點了另一家、這家也沒放購物車，就不再對這家喊「你還沒點餐」。
+ *   - 首頁「你好，○○」右邊一個小開關「🔔 截止提醒」（後端有給 remind 才出現；幫別人點時不出現），
+ *     按下去先變、跳說明小視窗、背景存（setRemind），失敗再改回。打開的人今天還沒點，截止前約 10 分鐘收到 LINE 私訊。
  */
 (function () {
   'use strict';
@@ -734,6 +740,7 @@
     var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') +
       (S.forId ? '　<b>（正在幫 ' + esc(S.forName) + ' 點）</b>' : '') +
       (S.homeStale ? '　<span class="tag" id="staleTag"' + (S.staleShow ? '' : ' hidden') + '>更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時；第 47 步：超過 2 秒才出現
+    if (S.home.remind && !S.forId) hello = '<div class="hello-row">' + hello + remindToggleHtml() + '</div>'; // 第 83 步
 
     if (u.status === '未申請' || u.status === '待審核') {
       var pending = u.status === '待審核';
@@ -1286,6 +1293,7 @@
       (m.session.late ? '<span class="tag warn">已截止・行政補單</span>' // 第 20 步
         : m.session.open ? '<span class="tag open">' + esc(m.session.cutoff) + ' 截止</span>' : '<span class="tag">已截止</span>') +
       (publicNote(m.store.note) ? '<p class="small muted">' + esc(publicNote(m.store.note)) + '</p>' : '') + menuImageLinks(m.store.menuImages) + '</div>'; // 第 69 步
+    head += switchStoreHtml(m); // 第 83 步：切換到另一家（購物車暫存保留）
     if (m.myOrder && m.session.open) head += '<div class="notice">你正在修改訂單，送出後會取代原本的訂單（$' + m.myOrder.total + '）。</div>';
     if (m.session.notice) head += '<div class="notice">公告：' + esc(m.session.notice) + '</div>';
     if (m.session.canceled) head += '<div class="notice">這一團已經取消，只能看菜單。</div>';
@@ -1721,12 +1729,91 @@
       (d.shown != null ? '<div class="notice">價格剛更新：購物車顯示 $' + d.shown + '，實際金額 $' + d.total + '（以這個為準）。</div>' : '') + // 第 53 步紅隊 3
       (S.forId ? '<div class="notice">已記在 ' + esc(S.forName) + ' 名下（行政代點）。</div>'
         : '<div class="notice">' + esc(m.session.cutoff) + ' 截止前都可以回首頁修改或取消。餐點送到後再付錢給行政。</div>') +
-      (next ? '<button class="btn primary block" data-act="menu" data-id="' + esc(next.id) + '">接著點' + esc(next.type) + '：' + esc(next.storeName) + '</button><div style="height:8px"></div>' : '') +
       (S.forId // 第 40 步：代點送出後問要繼續幫對方點，還是改回自己
-        ? '<div class="btn-row"><button class="btn" data-act="home">繼續幫 ' + esc(S.forName) + ' 點</button>' +
+        ? (next ? '<button class="btn block" data-act="menu" data-id="' + esc(next.id) + '">接著幫 ' + esc(S.forName) + ' 點' + esc(next.type) + '：' + esc(next.storeName) + '</button><div style="height:8px"></div>' : '') +
+          '<div class="btn-row"><button class="btn" data-act="home">繼續幫 ' + esc(S.forName) + ' 點</button>' +
           '<button class="btn primary" data-act="proxyOff">改回自己</button></div>'
+        // 第 83 步：只點一家的人不要被大綠鈕催：「不用，回首頁」和「點另一家」並排一樣大；兩家都點好了只剩回首頁
+        : next ? '<p class="small muted center-text next-ask">要不要也點' + esc(next.type) + '？</p>' +
+          '<div class="btn-row next-row"><button class="btn" data-act="home">不用，回首頁</button>' +
+          '<button class="btn" data-act="menu" data-id="' + esc(next.id) + '">' + typeIcon(next.type) + ' 點' + esc(next.type) + '</button></div>'
         : '<button class="btn block" data-act="home">回首頁</button>');
   }
+
+  /* ---------- 第 83 步：餐點、飲料之間切換；只點一家不打擾 ---------- */
+
+  function typeIcon(type) { return type === '飲料' ? '🥤' : '🍱'; }
+
+  // 今天另一家還開放、還能點的團（只看首頁資料；行政補單中的團不算）
+  function otherOpenSession(id) {
+    return ((S.home && S.home.sessions) || []).filter(function (s) {
+      return s.open && !s.late && !s.canceled && s.id !== id;
+    })[0] || null;
+  }
+
+  // 今天除了這一團，還有沒有別團已經點了（有效的單）
+  function orderedOther(id) {
+    return ((S.home && S.home.sessions) || []).some(function (s) { return s.id !== id && !s.canceled && s.myOrder; });
+  }
+
+  // 菜單頁店名下面的「切換到飲料：○○ ›」
+  function switchStoreHtml(m) {
+    if (!m.session.open) return '';
+    var o = otherOpenSession(m.session.id);
+    if (!o) return '';
+    var st = o.myOrder ? '已點 $' + o.myOrder.total : (draftCount(o.id) ? '購物車還沒送出' : '購物車會保留');
+    return '<button class="switch-store" data-act="switchStore" data-id="' + esc(o.id) + '">' +
+      '<span>' + typeIcon(o.type) + ' 切換到' + esc(o.type) + '：' + esc(o.storeName) + ' <small>（' + esc(st) + '）</small></span><span aria-hidden="true">›</span></button>';
+  }
+
+  function switchStore(id) {
+    if (S.menu && S.menu.session.open && S.cart.length && cartChanged()) {
+      saveCartDraft(); // 目前這家的購物車先存在手機
+      toast('「' + S.menu.store.name + '」的購物車已暫存，記得回來送出');
+    }
+    openMenu(id);
+  }
+
+  /* ---------- 第 83 步：首頁「🔔 截止提醒」開關（截止前 LINE 私訊） ---------- */
+
+  function remindToggleHtml() {
+    var on = !!(S.home.remind && S.home.remind.on);
+    return '<button class="remind-tg' + (on ? ' on' : '') + '" data-act="remindToggle" role="switch" aria-checked="' + on + '">' +
+      '🔔 截止提醒 <span class="tg" aria-hidden="true"></span></button>';
+  }
+
+  function remindToggle() {
+    if (!S.home || !S.home.remind) return;
+    var on = !S.home.remind.on;
+    S.home.remind.on = on; // 畫面先變，背景存，失敗再改回
+    var y = window.scrollY; render(); window.scrollTo(0, y);
+    showPop(on ? '🔔 已開啟截止提醒' : '🔕 已關閉截止提醒', on
+      ? '今天還沒點餐的話，截止前約 10 分鐘「YK中午吃什麼」會用 LINE 私訊提醒你。<br><span class="small muted">已點任一家就不會收到。要先加「YK中午吃什麼」好友才收得到；再按一次開關可以關掉。</span>'
+      : '之後不會再收到截止前的 LINE 私訊。<br><span class="small muted">想再收到，再按一次開關就好。</span>');
+    api('setRemind', { on: on }).then(function (r) {
+      if (S.home && S.home.remind && r && typeof r.on === 'boolean') S.home.remind.on = r.on;
+    }).catch(function (e) {
+      if (S.home && S.home.remind) S.home.remind.on = !on;
+      if (S.view === 'home') { var y2 = window.scrollY; render(); window.scrollTo(0, y2); }
+      hidePop();
+      alertMsg('截止提醒沒有存成功，已改回原本的設定。\n' + ((e && e.message) || ''));
+    });
+  }
+
+  // 小浮動視窗（按「知道了」或旁邊關掉）
+  var $pop = document.createElement('div');
+  $pop.className = 'guide-wrap';
+  $pop.hidden = true;
+  document.body.appendChild($pop);
+  function showPop(title, html) {
+    $pop.innerHTML = '<div class="sheet-backdrop" data-pop="x"></div>' +
+      '<section class="guide pop" role="dialog" aria-modal="true" aria-labelledby="popTitle">' +
+      '<h2 id="popTitle">' + esc(title) + '</h2><p>' + html + '</p>' +
+      '<div class="btn-row"><button class="btn primary" data-pop="x">知道了</button></div></section>';
+    $pop.hidden = false;
+  }
+  function hidePop() { $pop.hidden = true; }
+  $pop.addEventListener('click', function (e) { if (e.target.closest('[data-pop]')) hidePop(); });
 
   /* ---------- 第 18 步：購物車暫存（存在這支手機，只限今天） ---------- */
 
@@ -2769,7 +2856,10 @@
           return;
         }
         if (left > WARN_MIN) return;
-        var tail = draftCount(s.id) ? '，購物車還沒送出' : (s.myOrder ? '' : '，你還沒點餐');
+        var drafted = draftCount(s.id);
+        // 第 83 步：已經點了另一家、這家也沒放購物車＝只想點一家，不再一直喊「你還沒點餐」
+        if (!drafted && !s.myOrder && orderedOther(s.id)) return;
+        var tail = drafted ? '，購物車還沒送出' : (s.myOrder ? '' : '，你還沒點餐');
         rows.push('⏰ ' + esc(s.type) + '「' + esc(s.storeName) + '」剩 <b>' + leftText(left) + '</b> 截止' + tail);
       });
       homeEl.innerHTML = rows.length ? '<div class="cd-banner">' + rows.join('<br>') + '</div>' : '';
@@ -2810,6 +2900,8 @@
         return api('apply', { realName: name }, function () { setLoading('排隊中，請稍候…'); }).then(function (r) { S.home = r; go('home'); toast('已送出'); }).catch(showError);
       }
       case 'menu': return openMenu(d.id);
+      case 'switchStore': return switchStore(d.id); // 第 83 步
+      case 'remindToggle': return remindToggle(); // 第 83 步
       case 'cancel': return cancelOrder(d.id);
       case 'item': return openItem(d.id, null);
       case 'edit': return openItem(S.cart[+d.i].itemId, +d.i);
