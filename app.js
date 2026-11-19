@@ -100,6 +100,8 @@
  *   - 首頁截止倒數：已經點了另一家、這家也沒放購物車，就不再對這家喊「你還沒點餐」。
  *   - 首頁「你好，○○」右邊一個小開關「🔔 截止提醒」（後端有給 remind 才出現；幫別人點時不出現），
  *     按下去先變、跳說明小視窗、背景存（setRemind），失敗再改回。打開的人今天還沒點，截止前約 10 分鐘收到 LINE 私訊。
+ * 第 92 步：截止提醒連續 5 個有開團的日子沒點會被後端自動關掉（home.remind.autoOff）；首頁開關改顯示「😴 提醒已自動關閉」，
+ *   再按一次就重新打開。打開時的說明小視窗多一句自動關閉的規則。
  * 第 91 步（行政代點防誤改）：
  *   - 行政幫人改單或取消時，那張單是同仁自己點的（後端 myOrder.by 是空白），先多問一次：
  *     「這張是 ○○ 自己 09:18 點的（燒肉飯 $70），確定要幫 ○○ 改／取消嗎？」行政自己代點的單照舊不多問。
@@ -1804,22 +1806,25 @@
 
   function remindToggleHtml() {
     var on = !!(S.home.remind && S.home.remind.on);
+    var auto = !on && !!(S.home.remind && S.home.remind.autoOff); // 第 92 步：5 個開團日沒點被自動關掉
     return '<button class="remind-tg' + (on ? ' on' : '') + '" data-act="remindToggle" role="switch" aria-checked="' + on + '">' +
-      '🔔 截止提醒 <span class="tg" aria-hidden="true"></span></button>';
+      (auto ? '😴 提醒已自動關閉' : '🔔 截止提醒') + ' <span class="tg" aria-hidden="true"></span></button>';
   }
 
   function remindToggle() {
     if (!S.home || !S.home.remind) return;
     var on = !S.home.remind.on;
+    var wasAuto = !!S.home.remind.autoOff;
     S.home.remind.on = on; // 畫面先變，背景存，失敗再改回
+    if (on) S.home.remind.autoOff = false;
     var y = window.scrollY; render(); window.scrollTo(0, y);
     showPop(on ? '🔔 已開啟截止提醒' : '🔕 已關閉截止提醒', on
-      ? '今天還沒點餐的話，截止前約 10 分鐘「YK中午吃什麼」會用 LINE 私訊提醒你。<br><span class="small muted">已點任一家就不會收到。要先加「YK中午吃什麼」好友才收得到；再按一次開關可以關掉。</span>'
+      ? '今天還沒點餐的話，截止前約 10 分鐘「YK中午吃什麼」會用 LINE 私訊提醒你。<br><span class="small muted">已點任一家就不會收到。要先加「YK中午吃什麼」好友才收得到；再按一次開關可以關掉。連續 5 個有開團的日子都沒點，會自動關掉（省 LINE 則數），想再收到再打開就好。</span>'
       : '之後不會再收到截止前的 LINE 私訊。<br><span class="small muted">想再收到，再按一次開關就好。</span>');
     api('setRemind', { on: on }).then(function (r) {
       if (S.home && S.home.remind && r && typeof r.on === 'boolean') S.home.remind.on = r.on;
     }).catch(function (e) {
-      if (S.home && S.home.remind) S.home.remind.on = !on;
+      if (S.home && S.home.remind) { S.home.remind.on = !on; S.home.remind.autoOff = wasAuto; }
       if (S.view === 'home') { var y2 = window.scrollY; render(); window.scrollTo(0, y2); }
       hidePop();
       alertMsg('截止提醒沒有存成功，已改回原本的設定。\n' + ((e && e.message) || ''));
