@@ -388,3 +388,24 @@ details.wallet-card[open] > summary { margin-bottom: 6px; }
 .wallet-row { padding: 4px 0; border-top: 1px dashed #e9d7f7; }
 .wallet-row .neg { color: #c62828; } .wallet-row .pos { color: #06a35a; }
 .tag.wal { background: #f3e8fd; color: #6a1b9a; }
+
+/* 第 83 步：切換到另一家、成功畫面兩顆按鈕、首頁截止提醒開關、說明小視窗 */
+.switch-store {
+  display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px;
+  background: #eef2ff; color: #3949ab; border: 0; border-radius: 10px; padding: 10px 12px;
+  font-size: 15px; font-weight: 600; text-align: left; margin: 0 0 10px;
+}
+.switch-store small { color: var(--muted); font-weight: 400; }
+.next-ask { margin: 4px 0 6px; }
+.next-row { margin-top: 0; }
+.hello-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 12px; }
+.hello-row > p { margin: 0; flex: 1; min-width: 0; }
+.remind-tg {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; border: 0; background: none;
+  padding: 4px 0; font-size: 14px; color: #374151; white-space: nowrap;
+}
+.remind-tg .tg { position: relative; width: 38px; height: 22px; border-radius: 11px; background: #ccc; transition: background .15s; }
+.remind-tg .tg::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+.remind-tg.on .tg { background: var(--brand); }
+.remind-tg.on .tg::after { left: 19px; }
+.guide.pop h2 { font-size: 18px; }
