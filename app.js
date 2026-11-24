@@ -107,6 +107,9 @@
  *     「這張是 ○○ 自己 09:18 點的（燒肉飯 $70），確定要幫 ○○ 改／取消嗎？」行政自己代點的單照舊不多問。
  *     後端還沒更新（沒有 by）就不多問，前後端上線順序對調不會壞。
  *   - 首頁每團多一行「✏️ 行政○○ 09:52 幫你改過／點的／取消了」（後端 touch）；我的訂單的取消標「行政○○取消」。不發 LINE。
+ * 第 99 步（大字體，使用者 11-24 看示意圖三同意）：首頁「你好」右邊多一個「Aa 大字」開關，
+ *   打開後 <html> 加 class big，style.css 的 --fs 變 1.2，所有字放大 1.2 倍、按鈕加高。
+ *   設定只記在這支手機（localStorage yk_big_font），按了馬上變，不呼叫後端。
  */
 (function () {
   'use strict';
@@ -155,6 +158,12 @@
   /* ---------- 第 25 步：首次使用導覽（只有文字；看過記在這支手機） ---------- */
 
   var GUIDE_KEY = 'yk_guide_v2'; // 第 31 步：說明改了，讓大家再看一次
+
+  // 第 99 步：「Aa 大字」開關，記在這支手機；一載入就套用，畫面不會先小後大
+  var BIG_KEY = 'yk_big_font';
+  function bigOn() { try { return localStorage.getItem(BIG_KEY) === '1'; } catch (x) { return false; } }
+  function applyBig(on) { document.documentElement.classList.toggle('big', !!on); }
+  applyBig(bigOn());
   var GUIDE_PAGES = [
     { h: '選今天的店', p: '每天會開一家餐點、一家飲料。在首頁找到想點的店，按「開始點餐」。' },
     { h: '選品項、送出', p: '選好加進購物車，最後按綠色「送出訂單」，看到大勾勾才算點好。' },
@@ -747,7 +756,9 @@
     var hello = '<p class="muted small">' + esc(S.home.today) + '　你好，' + esc(u.realName || u.lineName || '') +
       (S.forId ? '　<b>（正在幫 ' + esc(S.forName) + ' 點）</b>' : '') +
       (S.homeStale ? '　<span class="tag" id="staleTag"' + (S.staleShow ? '' : ' hidden') + '>更新中…</span>' : '') + '</p>'; // 第 16 步：先顯示上次的首頁時；第 47 步：超過 2 秒才出現
-    if (S.home.remind && !S.forId) hello = '<div class="hello-row">' + hello + remindToggleHtml() + '</div>'; // 第 83 步
+    // 第 83 步截止提醒；第 99 步「Aa 大字」一律出現（幫別人點時也有）
+    hello = '<div class="hello-row">' + hello + '<span class="hello-tgs">' +
+      (S.home.remind && !S.forId ? remindToggleHtml() : '') + fontToggleHtml() + '</span></div>';
 
     if (u.status === '未申請' || u.status === '待審核') {
       var pending = u.status === '待審核';
@@ -1719,7 +1730,7 @@
   function renderHistory() {
     var d = S.history;
     $title.textContent = d.forName ? d.forName + ' 的訂單' : '我的訂單'; // 第 20 步
-    var html = '<div class="card"><div class="row"><span>尚未付款</span><b style="font-size:22px">$' + d.unpaid + '</b></div>' +
+    var html = '<div class="card"><div class="row"><span>尚未付款</span><b style="font-size:calc(22px * var(--fs))">$' + d.unpaid + '</b></div>' +
       '<p class="small muted" style="margin:4px 0 0">只計算有效且尚未付款的訂單，' + (d.wallet && !d.wallet.paused ? '可以付現金，或請行政從儲值扣。' : '現金請交給行政。') + '</p></div>';
     if (d.wallet) html += walletHistCard(d.wallet); // 第 71 步：儲值餘額＋明細
     if (!d.orders.length) html += '<p class="center muted">還沒有訂單紀錄。</p>';
@@ -1830,6 +1841,22 @@
       hidePop();
       alertMsg('截止提醒沒有存成功，已改回原本的設定。\n' + ((e && e.message) || ''));
     });
+  }
+
+  /* ---------- 第 99 步：首頁「Aa 大字」開關（只存在這支手機，不用等後端） ---------- */
+
+  function fontToggleHtml() {
+    var on = bigOn();
+    return '<button class="remind-tg font-tg' + (on ? ' on' : '') + '" data-act="fontToggle" role="switch" aria-checked="' + on + '">' +
+      '<b>Aa</b> 大字 <span class="tg" aria-hidden="true"></span></button>';
+  }
+
+  function fontToggle() {
+    var on = !bigOn();
+    try { localStorage.setItem(BIG_KEY, on ? '1' : '0'); } catch (x) {}
+    applyBig(on);
+    var y = window.scrollY; render(); window.scrollTo(0, y);
+    toast(on ? '已改成大字' : '已改回一般字');
   }
 
   // 小浮動視窗（按「知道了」或旁邊關掉）
@@ -2934,6 +2961,7 @@
       case 'menu': return openMenu(d.id);
       case 'switchStore': return switchStore(d.id); // 第 83 步
       case 'remindToggle': return remindToggle(); // 第 83 步
+      case 'fontToggle': return fontToggle(); // 第 99 步
       case 'cancel': return cancelOrder(d.id);
       case 'item': return openItem(d.id, null);
       case 'edit': return openItem(S.cart[+d.i].itemId, +d.i);
